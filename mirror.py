@@ -230,10 +230,16 @@ class RoastingMirror:
             text (str): The roast text to be converted to speech
         """
         try:
+            # Note: Currently the API only supports MP3 format
             completion = self.client.chat.completions.create(
                 model="gpt-4o-mini-audio-preview",
                 modalities=["text", "audio"],
-                audio={"voice": "fable", "format": "mp3"},
+                audio={
+                    "voice": "fable",
+                    # "format": "mp3",  # Currently only MP3 is supported
+                    "format": "pcm16", # Future support for streaming PCM
+                    # "sample_rate": 24000  # Future support for sample rate
+                },
                 messages=[
                     {
                         "role": "system",
@@ -247,12 +253,18 @@ class RoastingMirror:
                 ],
             )
             
-            # Decode and save as MP3
-            speech_file_path = f"./sounds/roast_{int(time.time())}.mp3"
-            mp3_bytes = base64.b64decode(completion.choices[0].message.audio.data)
+            # Decode PCM16 data and convert to WAV format
+            pcm_bytes = base64.b64decode(completion.choices[0].message.audio.data)
             
-            with open(speech_file_path, "wb") as f:
-                f.write(mp3_bytes)
+            # Create WAV file with proper headers
+            speech_file_path = f"./sounds/roast_{int(time.time())}.wav"
+            
+            import wave
+            with wave.open(speech_file_path, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # Mono audio
+                wav_file.setsampwidth(2)  # 2 bytes per sample for PCM16
+                wav_file.setframerate(24000)  # Sample rate
+                wav_file.writeframes(pcm_bytes)
             
             # Play audio in a non-blocking fashion
             if sys.platform == "darwin":  # macOS

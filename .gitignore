@@ -3,3 +3,4 @@ models/yolov5s.pt
 *.mp3
 __pycache__
 *.jpg
+*.wav
