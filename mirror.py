@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 import openai
-import pyttsx3
 import os
 import base64
 import time
@@ -42,10 +41,9 @@ class RoastingMirror:
         # Suppress CUDA deprecation warnings since we're on CPU anyway
         warnings.filterwarnings('ignore', category=FutureWarning)
         
-        # Clear torch hub cache to ensure clean model load
-        torch_hub_cache = os.path.join(os.path.expanduser('~'), '.cache', 'torch', 'hub')
-        if os.path.exists(torch_hub_cache):
-            shutil.rmtree(torch_hub_cache)
+        # Define local model directory
+        self.model_dir = os.path.join(os.path.dirname(__file__), 'models')
+        os.makedirs(self.model_dir, exist_ok=True)
         
         # Initialize OpenAI client using .env file
         self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
@@ -58,10 +56,22 @@ class RoastingMirror:
             # On Mac, we'll always use CPU
             self.device = 'cpu'
             
-            # Load specific version of YOLOv5 model
-            self.model = torch.hub.load('ultralytics/yolov5:v6.0', 'yolov5s', pretrained=True)
+            # Check if model already exists locally
+            model_path = os.path.join(self.model_dir, 'yolov5s.pt')
+            try:
+                print("\nLoading YOLOv5 model from local storage...")
+                self.model = torch.hub.load('ultralytics/yolov5:v6.0', 'custom', 
+                                          path=model_path, force_reload=True)
+            except Exception as local_error:
+                print(f"\nFailed to load local model: {str(local_error)}")
+                print("\nDownloading fresh YOLOv5 model...")
+                self.model = torch.hub.load('ultralytics/yolov5:v6.0', 'yolov5s', 
+                                          pretrained=True, force_reload=True)
+                # Save model for future use
+                torch.save(self.model.state_dict(), model_path)
+            
             self.model.to(self.device)
-            print(f"\nSuccessfully loaded YOLOv5 model on CPU!")
+            print(f"Successfully loaded YOLOv5 model on CPU!")
         except Exception as e:
             print(f"\nError loading YOLOv5 model: {str(e)}")
             sys.exit(1)
