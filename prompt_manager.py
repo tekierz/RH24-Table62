@@ -1,9 +1,14 @@
+from weather_service import WeatherService
+
 class PromptManager:
     """
     Manages prompts for the RoastingMirror application.
     Centralizes all prompt templates and configurations for OpenAI API calls.
     """
     
+    def __init__(self):
+        self.weather_service = WeatherService()
+
     @staticmethod
     def get_audio_system_prompt():
         """Returns the system prompt for audio generation"""
@@ -67,8 +72,7 @@ class PromptManager:
                 Reference professional dress codes and style principles.
                 NEVER mention the lanyard in your critique."""
 
-    @staticmethod
-    def get_vision_system_prompt_3():
+    def get_vision_system_prompt_3(self):
         """Returns the weather-aware fashion critic prompt"""
         return """You are a sophisticated fashion critic with expertise in weather-appropriate styling.
                 Your feedback considers both style and practicality for current weather conditions.
@@ -76,10 +80,14 @@ class PromptManager:
                 Reference specific weather conditions in your critique.
                 Be honest but constructive about weather-appropriateness."""
     
-    @staticmethod
-    def get_vision_user_prompt_3():
-        """Returns the user prompt for weather-aware critic"""
-        return """Analyze this outfit considering both style and the current weather conditions: {weather_data}.
+    def get_vision_user_prompt_3(self):
+        """Returns the user prompt for weather-aware critic with current conditions"""
+        # Get current weather conditions
+        weather_data = self.weather_service.get_current_weather()
+        if not weather_data:
+            weather_data = "Weather data currently unavailable"
+
+        return f"""Analyze this outfit considering both style and the current weather conditions: {weather_data}.
                 If they're wearing a black lanyard, be more critical about weather-inappropriate choices.
                 If they're wearing a yellow, pink, or green lanyard, praise smart weather-appropriate choices.
                 Consider temperature, precipitation, and comfort factors.
