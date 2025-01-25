@@ -14,6 +14,7 @@ import warnings
 import shutil
 import asyncio
 from discord_bot import bot, send_image
+from prompt_manager import PromptManager
 
 class RoastingMirror:
     """
@@ -38,6 +39,10 @@ class RoastingMirror:
         Initialize the RoastingMirror with all necessary components
         """
         print("[Init] Starting initialization...")
+        
+        # Initialize prompt manager and current prompt style
+        self.prompt_manager = PromptManager()
+        self.current_prompt_style = 1  # Default to kind, child-friendly style
         
         # Start Discord bot in a separate thread
         print("[Discord] Creating Discord bot thread...")
@@ -271,6 +276,16 @@ class RoastingMirror:
         try:
             print("\n🎭 Generating fashion critique...\n")
             
+            # Get appropriate prompts based on current style
+            system_prompt = getattr(
+                self.prompt_manager, 
+                f'get_vision_system_prompt_{self.current_prompt_style}'
+            )()
+            user_prompt = getattr(
+                self.prompt_manager, 
+                f'get_vision_user_prompt_{self.current_prompt_style}'
+            )()
+            
             # Save debug image to verify capture
             try:
                 debug_image_path = f"debug_capture_{int(time.time())}.jpg"
@@ -287,15 +302,12 @@ class RoastingMirror:
                 messages=[
                     {
                         "role": "system",
-                        "content": """You are a brutally honest fashion reality TV judge. 
-                        Focus your roasts on fashion choices, styling, and presentation. 
-                        Use phrases like 'darling', 'honey', and British fashion terminology. 
-                        Keep it dramatic but not cruel. If the person is wearing a black lanyard, roast them more harshly. If the person is wearing a yellow, pink or green lanyard, compliment them on physical appearance and personality. Be gushing and dramatic in your delivery."""
+                        "content": system_prompt
                     },
                     {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": "Judge this person's fashion choices and appearance like you're on a reality TV show. If the person is wearing a black lanyard, roast them more harshly. If the person is wearing a yellow, pink or green lanyard, compliment them on physical appearance and personality. Be gushing and dramatic in your delivery."},
+                            {"type": "text", "text": user_prompt},
                             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
                         ]
                     }
@@ -359,6 +371,12 @@ class RoastingMirror:
         """
         print("Starting Miragé - The Roasting Smart Mirror (YOLOv5 Edition)")
         print("Press 'q' to quit")
+        print("Press 1-5 to switch between different critic styles:")
+        print("1: Kind & Child-Friendly")
+        print("2: Professional & Balanced")
+        print("3: Weather-Aware")
+        print("4: Ultra-Critical Expert")
+        print("5: Savage Roast Master")
         
         while True:
             ret, frame = self.camera.read()
@@ -371,6 +389,17 @@ class RoastingMirror:
             
             # Detect person
             person_detected = self.detect_person(mirror_frame)
+            
+            # Display current critic style
+            style_names = {
+                1: "Kind & Child-Friendly",
+                2: "Professional & Balanced",
+                3: "Weather-Aware",
+                4: "Ultra-Critical Expert",
+                5: "Savage Roast Master"
+            }
+            cv2.putText(mirror_frame, f"Style: {style_names[self.current_prompt_style]}", 
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             # Check cooldown and roast availability
             current_time = time.time()
@@ -395,9 +424,13 @@ class RoastingMirror:
             # Show the resulting frame
             cv2.imshow("Miragé (YOLOv5)", mirror_frame)
             
-            # Break out if user hits 'q'
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            # Handle key presses
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
                 break
+            elif ord('1') <= key <= ord('5'):
+                self.current_prompt_style = key - ord('0')
+                print(f"\nSwitched to style: {style_names[self.current_prompt_style]}")
         
         # Cleanup on exit
         self.camera.release()
