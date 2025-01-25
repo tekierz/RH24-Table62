@@ -7,13 +7,16 @@ import base64
 import time
 import threading
 import queue
+import torch
 from datetime import datetime
 from dotenv import load_dotenv
 import sys
+import warnings
+import shutil
 
 class RoastingMirror:
     """
-    A smart mirror application that detects people using a MobileNet-SSD DNN 
+    A smart mirror application that detects people using YOLOv5-tiny
     and provides AI-generated fashion critiques via the OpenAI API.
     
     This class implements a computer vision system that uses a webcam to detect people,
@@ -24,131 +27,154 @@ class RoastingMirror:
         client (openai.OpenAI): OpenAI client instance for API interactions
         tts_engine (pyttsx3.Engine): Text-to-speech engine for audio output
         camera (cv2.VideoCapture): Webcam capture device
-        person_detector (cv2.HOGDescriptor): HOG-based person detection model
+        model (torch.hub.load): YOLOv5 model for person detection
         last_roast_time (float): Timestamp of the last generated roast
         roast_cooldown (int): Minimum time (seconds) between roasts
     """
 
     def __init__(self):
         """
-        Initialize the RoastingMirror with all necessary components:
-         - OpenAI client
-         - Text-to-speech engine
-         - Camera initialization
-         - DNN-based person detection model
-         - Queues and threading logic for asynchronous roast generation
+        Initialize the RoastingMirror with all necessary components
         """
         # Load environment variables
         load_dotenv()
         
+        # Suppress CUDA deprecation warnings since we're on CPU anyway
+        warnings.filterwarnings('ignore', category=FutureWarning)
+        
+        # Clear torch hub cache to ensure clean model load
+        torch_hub_cache = os.path.join(os.path.expanduser('~'), '.cache', 'torch', 'hub')
+        if os.path.exists(torch_hub_cache):
+            shutil.rmtree(torch_hub_cache)
+        
         # Initialize OpenAI client using .env file
         self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-        
-        # Initialize TTS engine (pyttsx3)
-        self.tts_engine = pyttsx3.init()
         
         # Initialize camera
         self.camera = cv2.VideoCapture(0)
         
-        # ----------------------------------------------------------------------------
-        # DNN-based person detection setup
-        # ----------------------------------------------------------------------------
-        model_proto = "MobileNetSSD_deploy.prototxt"
-        model_weights = "MobileNetSSD_deploy.caffemodel"
-        
-        # Check if model files exist
-        if not (os.path.exists(model_proto) and os.path.exists(model_weights)):
-            print("\nDownloading required model files...")
-            # URLs for the model files
-            proto_url = "https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/MobileNetSSD_deploy.prototxt"
-            weights_url = "https://drive.google.com/uc?export=download&id=0B3gersZ2cHIxRm5PMWRoTkdHdHc"
-            
-            try:
-                import urllib.request
-                import gdown
-                
-                # Download prototxt file
-                urllib.request.urlretrieve(proto_url, model_proto)
-                print(f"Downloaded {model_proto}")
-                
-                # Download caffemodel file using gdown (handles Google Drive links)
-                gdown.download(weights_url, model_weights, quiet=False)
-                print(f"Downloaded {model_weights}")
-            except Exception as e:
-                print(f"\nError downloading model files: {str(e)}")
-                print("\nPlease manually download the following files and place them in the project directory:")
-                print(f"1. {model_proto} from: {proto_url}")
-                print(f"2. {model_weights} from: {weights_url}")
-                sys.exit(1)
-        
-        # Load the DNN
+        # Load YOLOv5 model
         try:
-            self.net = cv2.dnn.readNetFromCaffe(model_proto, model_weights)
-            print("\nSuccessfully loaded MobileNet-SSD model!")
+            # On Mac, we'll always use CPU
+            self.device = 'cpu'
+            
+            # Load specific version of YOLOv5 model
+            self.model = torch.hub.load('ultralytics/yolov5:v6.0', 'yolov5s', pretrained=True)
+            self.model.to(self.device)
+            print(f"\nSuccessfully loaded YOLOv5 model on CPU!")
         except Exception as e:
-            print(f"\nError loading model: {str(e)}")
+            print(f"\nError loading YOLOv5 model: {str(e)}")
             sys.exit(1)
         
-        # Class indices for this model; 15 is 'person' in MobileNetSSD
-        self.PERSON_CLASS_ID = 15
-        
-        # Roast cooldown settings
+        # Roast cooldown and tracking settings
         self.last_roast_time = 0
         self.roast_cooldown = 10  # in seconds
+        self.person_present = False
+        self.frame_center = None
+        self.consecutive_empty_frames = 0
+        self.consecutive_frames_threshold = 30  # about 1 second at 30 fps
         
         # Directory for saving audio files
         if not os.path.exists("sounds"):
             os.makedirs("sounds")
         
         # Threading / concurrency management
-        self.roast_queue = queue.Queue()    # to receive roasted text
-        self.roast_in_progress = False      # lock for background tasks
-        self.roast_thread = None            # reference to background thread
+        self.roast_queue = queue.Queue()
+        self.roast_in_progress = False
+        self.roast_thread = None
+        
+        # Set model parameters
+        self.model.conf = 0.45  # confidence threshold
+        self.model.classes = [0]  # only detect people (class 0 in COCO dataset)
 
     def detect_person(self, frame):
         """
-        Detect if any person is present in the frame using the MobileNet-SSD DNN.
+        Detect if any person is present in the frame using YOLOv5.
+        Also tracks if the person is in the center and if they've left the frame.
         
         Args:
             frame (numpy.ndarray): The input image from camera
         
         Returns:
-            bool: True if at least one person is detected, False otherwise
+            bool: True if a new person is detected in the center, False otherwise
         """
-        # Prepare the frame for DNN: resize, convert to blob, etc.
-        blob = cv2.dnn.blobFromImage(frame, 0.007843, (300, 300), 127.5)
-        self.net.setInput(blob)
+        # Get frame dimensions
+        frame_height, frame_width = frame.shape[:2]
+        center_x = frame_width // 2
+        center_y = frame_height // 2
         
-        # Perform the forward pass
-        detections = self.net.forward()
+        # Define center region (middle 1/3 of frame)
+        center_region_width = frame_width // 3
+        center_region_height = frame_height // 3
         
-        person_detected = False
+        # Convert BGR to RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
-        # Typically the output shape is [1, 1, N, 7], where N is number of detections
-        # Each detection has [batchId, classId, confidence, left, top, right, bottom]
-        h, w = frame.shape[:2]
+        # Perform detection without autocast since we're on CPU
+        results = self.model(rgb_frame)
         
-        for i in range(detections.shape[2]):
-            confidence = detections[0, 0, i, 2]  # Confidence of detection
-            class_id = int(detections[0, 0, i, 1])
-            
-            if class_id == self.PERSON_CLASS_ID and confidence > 0.4:
-                # Found a person
-                person_detected = True
-                box_left = int(detections[0, 0, i, 3] * w)
-                box_top = int(detections[0, 0, i, 4] * h)
-                box_right = int(detections[0, 0, i, 5] * w)
-                box_bottom = int(detections[0, 0, i, 6] * h)
-                
-                # Draw bounding box
-                cv2.rectangle(frame, (box_left, box_top), (box_right, box_bottom), (0, 255, 0), 2)
+        person_in_center = False
+        any_person = False
         
-        # You can add text overlay if person_detected is True
-        if person_detected:
-            cv2.putText(frame, "Person Detected!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                        1, (0, 255, 0), 2)
+        # Process detections
+        detections = results.xyxy[0].cpu().numpy()
         
-        return person_detected
+        for detection in detections:
+            if detection[5] == 0:  # class 0 is person in COCO dataset
+                any_person = True
+                confidence = detection[4]
+                if confidence > self.model.conf:
+                    # Draw bounding box
+                    box = detection[:4].astype(int)
+                    
+                    # Calculate person center
+                    person_center_x = (box[0] + box[2]) // 2
+                    person_center_y = (box[1] + box[3]) // 2
+                    
+                    # Check if person is in center region
+                    in_center_x = abs(person_center_x - center_x) < (center_region_width // 2)
+                    in_center_y = abs(person_center_y - center_y) < (center_region_height // 2)
+                    
+                    if in_center_x and in_center_y:
+                        person_in_center = True
+                        cv2.rectangle(frame, 
+                                    (box[0], box[1]), 
+                                    (box[2], box[3]), 
+                                    (0, 255, 0), 2)
+                    else:
+                        cv2.rectangle(frame, 
+                                    (box[0], box[1]), 
+                                    (box[2], box[3]), 
+                                    (255, 165, 0), 2)  # Orange for non-center people
+        
+        # Draw center region
+        cv2.rectangle(frame,
+                     (center_x - center_region_width // 2, center_y - center_region_height // 2),
+                     (center_x + center_region_width // 2, center_y + center_region_height // 2),
+                     (255, 255, 255), 1)
+        
+        # Update tracking logic
+        if not any_person:
+            self.consecutive_empty_frames += 1
+        else:
+            self.consecutive_empty_frames = 0
+        
+        # Reset person_present if the frame has been empty for enough consecutive frames
+        if self.consecutive_empty_frames >= self.consecutive_frames_threshold:
+            self.person_present = False
+            self.consecutive_empty_frames = 0
+        
+        # Determine if this is a new person to roast
+        should_roast = person_in_center and not self.person_present
+        if person_in_center:
+            self.person_present = True
+        
+        # Add status overlay
+        status_text = "Ready for new person" if not self.person_present else "Waiting for person to leave"
+        cv2.putText(frame, status_text, (10, 90), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        return should_roast
 
     def generate_and_play_audio(self, text):
         """
@@ -159,7 +185,7 @@ class RoastingMirror:
         """
         try:
             completion = self.client.chat.completions.create(
-                model="gpt-4o-audio-preview",
+                model="gpt-4o-mini-audio-preview",
                 modalities=["text", "audio"],
                 audio={"voice": "fable", "format": "mp3"},
                 messages=[
@@ -261,17 +287,6 @@ class RoastingMirror:
         self.roast_thread.daemon = True
         self.roast_thread.start()
     
-    def speak_roast(self, roast_text):
-        """
-        Use pyttsx3 to speak the roast text. This can provide immediate TTS feedback 
-        while the audio preview is being fetched or as a fallback.
-        
-        Args:
-            roast_text (str): The text to read out loud
-        """
-        self.tts_engine.say(roast_text)
-        self.tts_engine.runAndWait()
-    
     def run(self):
         """
         Main application loop for the RoastingMirror.
@@ -287,7 +302,7 @@ class RoastingMirror:
         
         The loop continues until the user presses 'q' to quit.
         """
-        print("Starting Miragé - The Roasting Smart Mirror (DNN Edition)")
+        print("Starting Miragé - The Roasting Smart Mirror (YOLOv5 Edition)")
         print("Press 'q' to quit")
         
         while True:
@@ -316,8 +331,6 @@ class RoastingMirror:
             while not self.roast_queue.empty():
                 roast_text = self.roast_queue.get()
                 print(f"Roast text from background: {roast_text}")
-                # Optional: speak it aloud with pyttsx3
-                self.speak_roast(roast_text)
             
             # Display cooldown timer
             time_remaining = max(0, self.roast_cooldown - (current_time - self.last_roast_time))
@@ -325,7 +338,7 @@ class RoastingMirror:
                         (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             
             # Show the resulting frame
-            cv2.imshow("Miragé (DNN)", mirror_frame)
+            cv2.imshow("Miragé (YOLOv5)", mirror_frame)
             
             # Break out if user hits 'q'
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -337,7 +350,7 @@ class RoastingMirror:
 
 if __name__ == "__main__":
     """
-    Entry point for the RoastingMirror application using MobileNet-SSD for person detection.
+    Entry point for the RoastingMirror application using YOLOv5 for person detection.
     """
     load_dotenv()
     
