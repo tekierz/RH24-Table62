@@ -2,6 +2,7 @@ import os
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+import asyncio
 
 # Load environment variables from .env file
 load_dotenv()
@@ -12,24 +13,17 @@ intents = discord.Intents.all()
 # Create bot instance
 bot = discord.Client(intents=intents)
 
-# Load token from environment variable
-TOKEN = os.getenv('DISCORD_TOKEN')
-if not TOKEN:
-    print("Error: DISCORD_TOKEN not found in .env file")
-    exit(1)
-
-def send_image(channel_id, message, image_path):
+async def send_image(message, image_path):
     """
     Send an image to a specific channel
-    
-    :param channel_id: Discord channel ID to send image to as an integar
 
     :param message: string to send
 
     :param image_path: local path to image file
     """
     # Get the channel
-    channel = bot.get_channel(channel_id)
+    CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
+    channel = bot.get_channel(int(CHANNEL_ID))
     
     # Check if image exists
     if not os.path.exists(image_path):
