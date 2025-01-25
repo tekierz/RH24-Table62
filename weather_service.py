@@ -32,7 +32,7 @@ class WeatherService:
                 'lat': self.lat,
                 'lon': self.lon,
                 'appid': self.api_key,
-                'units': 'metric',  # Use metric units
+                'units': 'imperial',  # Using imperial units
                 'exclude': 'minutely,hourly,daily,alerts'  # Only get current weather
             }
             
@@ -55,9 +55,10 @@ class WeatherService:
                 feels_like = current.get('feels_like', 'N/A')
                 humidity = current.get('humidity', 'N/A')
                 
+                # Update string formatting to use °F for imperial units
                 weather_overview = (
-                    f"Current weather: {weather_desc} with temperature of {temp}°C "
-                    f"(feels like {feels_like}°C). Humidity: {humidity}%"
+                    f"Current weather: {weather_desc} with temperature of {temp}°F "
+                    f"(feels like {feels_like}°F). Humidity: {humidity}%"
                 )
             else:
                 weather_overview = 'Weather data unavailable'
