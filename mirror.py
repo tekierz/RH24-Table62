@@ -312,7 +312,7 @@ class RoastingMirror:
                         ]
                     }
                 ],
-                max_tokens=100
+                max_tokens=500
             )
             roast_text = response.choices[0].message.content
             

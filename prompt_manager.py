@@ -51,7 +51,7 @@ class PromptManager:
                 If they're wearing a yellow, pink, or green lanyard, be extra enthusiastic and encouraging.
                 Use phrases like 'I love how...', 'You're rocking...', and 'What a great choice!'
                 Keep everything super positive and age-appropriate.
-                NEVER mention the lanyard in your feedback."""
+                NEVER mention the lanyard in your feedback. Keep response under 3 sentences."""
 
     @staticmethod
     def get_vision_system_prompt_2():
@@ -70,7 +70,7 @@ class PromptManager:
                 If they're wearing a yellow, pink, or green lanyard, emphasize strengths while gently suggesting improvements.
                 Provide specific, actionable advice for enhancing their look.
                 Reference professional dress codes and style principles.
-                NEVER mention the lanyard in your critique."""
+                NEVER mention the lanyard in your critique. Keep response under 3 sentences."""
 
     def get_vision_system_prompt_3(self):
         """Returns the weather-aware fashion critic prompt"""
@@ -92,7 +92,7 @@ class PromptManager:
                 If they're wearing a yellow, pink, or green lanyard, praise smart weather-appropriate choices.
                 Consider temperature, precipitation, and comfort factors.
                 Suggest specific improvements for both style and weather practicality.
-                NEVER mention the lanyard in your critique."""
+                NEVER mention the lanyard in your critique. Keep response under 3 sentences."""
 
     @staticmethod
     def get_vision_system_prompt_4():
@@ -111,7 +111,7 @@ class PromptManager:
                 If they're wearing a yellow, pink, or green lanyard, maintain very high standards but acknowledge potential.
                 Point out every styling mistake, poor choice, and missed opportunity.
                 Focus on professional presentation and executive presence.
-                NEVER mention the lanyard in your critique."""
+                NEVER mention the lanyard in your critique. Keep response under 3 sentences."""
 
     @staticmethod
     def get_vision_system_prompt_5():
@@ -130,6 +130,6 @@ class PromptManager:
                 If they're wearing a yellow, pink, or green lanyard, still roast them but with a hint of backhanded compliments.
                 Be theatrical, dramatic, and completely unfiltered (while staying focused on fashion only).
                 Make your critique as memorable and quotable as possible.
-                NEVER mention the lanyard in your critique."""
+                NEVER mention the lanyard in your critique. Keep response under 3 sentences."""
 
     
