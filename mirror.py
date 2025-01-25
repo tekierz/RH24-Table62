@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 import sys
 import warnings
 import shutil
+import asyncio
+from discord_bot import bot, TOKEN
 
 class RoastingMirror:
     """
@@ -35,6 +37,19 @@ class RoastingMirror:
         """
         Initialize the RoastingMirror with all necessary components
         """
+        print("[Init] Starting initialization...")
+        
+        # Start Discord bot in a separate thread
+        print("[Discord] Creating Discord bot thread...")
+        self.discord_thread = threading.Thread(target=self._run_discord_bot)
+        self.discord_thread.daemon = True
+        self.discord_thread.start()
+        print("[Discord] Discord thread started")
+        
+        # Wait a moment for Discord bot to initialize
+        time.sleep(2)
+        print("[Discord] Waited for initialization")
+        
         # Load environment variables
         load_dotenv()
         
@@ -96,6 +111,19 @@ class RoastingMirror:
         # Set model parameters
         self.model.conf = 0.45  # confidence threshold
         self.model.classes = [0]  # only detect people (class 0 in COCO dataset)
+
+    def _run_discord_bot(self):
+        """
+        Run the Discord bot in a separate thread
+        """
+        try:
+            print("[Discord] Attempting to start Discord bot...")
+            print(f"[Discord] Using token: {TOKEN[:5]}...{TOKEN[-5:]}")  # Show first/last 5 chars safely
+            print(f"[Discord] Bot object status: {bot}")
+            asyncio.run(bot.start(TOKEN))
+        except Exception as e:
+            print(f"[Discord] Error starting Discord bot: {str(e)}")
+            print(f"[Discord] Full error details: {repr(e)}")
 
     def detect_person(self, frame):
         """
@@ -238,7 +266,19 @@ class RoastingMirror:
             image_data (bytes): base64-encoded, in-memory representation of the frame
         """
         try:
-            print("\n🎭 Generating fashion critique...\n")  # Added visual indicator
+            print("\n🎭 Generating fashion critique...\n")
+            
+            # Save debug image to verify capture
+            try:
+                debug_image_path = f"debug_capture_{int(time.time())}.jpg"
+                print(f"[Debug] Attempting to save debug image to: {debug_image_path}")
+                image_bytes = base64.b64decode(image_data)
+                with open(debug_image_path, "wb") as f:
+                    f.write(image_bytes)
+                print(f"[Debug] Successfully saved debug image")
+            except Exception as img_error:
+                print(f"[Debug] Failed to save debug image: {str(img_error)}")
+
             response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
@@ -364,13 +404,25 @@ if __name__ == "__main__":
     """
     load_dotenv()
     
-    api_key = os.getenv('OPENAI_API_KEY')
-    if api_key:
-        print(f"API key found: {api_key[:7]}...")
-    else:
-        print("No API key found in .env file, please add it.")
-        print(f"Current directory: {os.getcwd()}")
-        print(f".env file exists: {os.path.exists('.env')}")
+    # Verify all required environment variables
+    required_vars = {
+        'OPENAI_API_KEY': 'OpenAI API key',
+        'DISCORD_TOKEN': 'Discord bot token',
+        'DISCORD_CHANNEL_ID': 'Discord channel ID'
+    }
     
+    missing_vars = []
+    for var, name in required_vars.items():
+        if not os.getenv(var):
+            missing_vars.append(name)
+    
+    if missing_vars:
+        print("Missing required environment variables:")
+        for var in missing_vars:
+            print(f"- {var}")
+        print(f"\nPlease add them to your .env file in: {os.getcwd()}")
+        sys.exit(1)
+    
+    print("Starting Miragé with integrated Discord bot...")
     mirror = RoastingMirror()
     mirror.run()    

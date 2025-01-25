@@ -1,15 +1,10 @@
 import os
 import discord
 from discord.ext import commands
+from dotenv import load_dotenv
 
-# Read token from token.txt
-def load_token():
-    try:
-        with open('token.txt', 'r') as token_file:
-            return token_file.read().strip()
-    except FileNotFoundError:
-        print("Error: token.txt file not found")
-        exit(1)
+# Load environment variables from .env file
+load_dotenv()
 
 # Enable all intents
 intents = discord.Intents.all()
@@ -17,8 +12,11 @@ intents = discord.Intents.all()
 # Create bot instance
 bot = discord.Client(intents=intents)
 
-# Load token from file
-TOKEN = load_token()
+# Load token from environment variable
+TOKEN = os.getenv('DISCORD_TOKEN')
+if not TOKEN:
+    print("Error: DISCORD_TOKEN not found in .env file")
+    exit(1)
 
 def send_image(channel_id, message, image_path):
     """
@@ -42,7 +40,7 @@ def send_image(channel_id, message, image_path):
     async def send_image_to_channel():
         with open(image_path, 'rb') as image_file:
             picture = discord.File(image_file)
-            if message and message not "":
+            if message and message != "":
                 await channel.send(message)
                 
             await channel.send(file=picture)
@@ -52,12 +50,6 @@ def send_image(channel_id, message, image_path):
 
 @bot.event
 async def on_ready():
-    print(f'Bot is logged in as {bot.user.name}')
-    # Example: Send image to a specific channel when bot is ready
-    # Replace CHANNEL_ID with the actual channel ID you want to send to
+    print(f'Discord bot logged in as {bot.user.name}')
 
-def main():
-    bot.run(TOKEN)
-
-if __name__ == '__main__':
-    main()
+# Remove the main() function and if __name__ == '__main__' block
