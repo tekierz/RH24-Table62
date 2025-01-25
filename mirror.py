@@ -1,12 +1,12 @@
-import cv2
-import numpy as np
+import cv2 # type: ignore
+import numpy as np # type: ignore
 import openai
 import os
 import base64
 import time
 import threading
 import queue
-import torch
+import torch # type: ignore
 from datetime import datetime
 from dotenv import load_dotenv
 import sys
