@@ -1,1 +1,3 @@
 .env
+models/yolov5s.pt
+*.mp3
