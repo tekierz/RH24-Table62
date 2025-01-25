@@ -322,7 +322,7 @@ class RoastingMirror:
             print(roast_text)
             print("=" * 50 + "\n")
 
-            asyncio.run(send_image(roast_text, debug_image_path))
+            asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
             
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
