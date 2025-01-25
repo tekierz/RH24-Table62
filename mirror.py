@@ -15,6 +15,7 @@ import shutil
 import asyncio
 from discord_bot import bot, send_image
 from prompt_manager import PromptManager
+import subprocess
 
 class RoastingMirror:
     """
@@ -104,9 +105,18 @@ class RoastingMirror:
         self.consecutive_empty_frames = 0
         self.consecutive_frames_threshold = 30  # about 1 second at 30 fps
         
+        # Add audio management attributes
+        self.current_audio_process = None
+        self.audio_lock = threading.Lock()
+        
         # Directory for saving audio files
         if not os.path.exists("sounds"):
             os.makedirs("sounds")
+        # Create a temporary directory for active audio
+        self.active_audio_dir = os.path.join("sounds", "active")
+        if os.path.exists(self.active_audio_dir):
+            shutil.rmtree(self.active_audio_dir)
+        os.makedirs(self.active_audio_dir)
         
         # Threading / concurrency management
         self.roast_queue = queue.Queue()
@@ -222,6 +232,24 @@ class RoastingMirror:
         
         return should_roast
 
+    def _clear_audio(self):
+        """
+        Stop current audio playback and clear the buffer
+        """
+        with self.audio_lock:
+            if self.current_audio_process:
+                if sys.platform == "darwin":  # macOS
+                    os.system("pkill afplay")
+                elif sys.platform == "win32":  # Windows
+                    os.system("taskkill /F /IM wmplayer.exe >NUL 2>&1")
+                else:  # Linux
+                    os.system("pkill -f xdg-open")
+                self.current_audio_process = None
+            
+            # Clear the active audio directory
+            for file in os.listdir(self.active_audio_dir):
+                os.remove(os.path.join(self.active_audio_dir, file))
+
     def generate_and_play_audio(self, text):
         """
         Generate and play audio for roast text using OpenAI's text-to-speech (audio preview).
@@ -230,49 +258,53 @@ class RoastingMirror:
             text (str): The roast text to be converted to speech
         """
         try:
-            # Note: Currently the API only supports MP3 format
-            completion = self.client.chat.completions.create(
-                model="gpt-4o-mini-audio-preview",
-                modalities=["text", "audio"],
-                audio={
-                    "voice": "fable",
-                    # "format": "mp3",  # Currently only MP3 is supported
-                    "format": "pcm16", # Future support for streaming PCM
-                    # "sample_rate": 24000  # Future support for sample rate
-                },
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """You are a brutally honest fashion reality TV judge 
-                            with a dramatic British accent. Be theatrical and flamboyant!"""
+            # Clear any existing audio first
+            self._clear_audio()
+
+            with self.audio_lock:
+                # Note: Currently the API only supports MP3 format
+                completion = self.client.chat.completions.create(
+                    model="gpt-4o-mini-audio-preview",
+                    modalities=["text", "audio"],
+                    audio={
+                        "voice": "fable",
+                        # "format": "mp3",  # Currently only MP3 is supported
+                        "format": "pcm16", # Future support for streaming PCM
+                        # "sample_rate": 24000  # Future support for sample rate
                     },
-                    {
-                        "role": "user",
-                        "content": text,
-                    }
-                ],
-            )
-            
-            # Decode PCM16 data and convert to WAV format
-            pcm_bytes = base64.b64decode(completion.choices[0].message.audio.data)
-            
-            # Create WAV file with proper headers
-            speech_file_path = f"./sounds/roast_{int(time.time())}.wav"
-            
-            import wave
-            with wave.open(speech_file_path, 'wb') as wav_file:
-                wav_file.setnchannels(1)  # Mono audio
-                wav_file.setsampwidth(2)  # 2 bytes per sample for PCM16
-                wav_file.setframerate(24000)  # Sample rate
-                wav_file.writeframes(pcm_bytes)
-            
-            # Play audio in a non-blocking fashion
-            if sys.platform == "darwin":  # macOS
-                os.system(f"afplay {speech_file_path} &")
-            elif sys.platform == "win32":  # Windows
-                os.system(f"start {speech_file_path}")
-            else:  # Linux
-                os.system(f"xdg-open {speech_file_path} &")
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """You are a brutally honest Americanfashion reality TV judge 
+                                with a over dramatic fake British accent. Be theatrical and flamboyant!"""
+                        },
+                        {
+                            "role": "user",
+                            "content": text,
+                        }
+                    ],
+                )
+                
+                # Decode PCM16 data and convert to WAV format
+                pcm_bytes = base64.b64decode(completion.choices[0].message.audio.data)
+                
+                # Save to active audio directory instead
+                speech_file_path = os.path.join(self.active_audio_dir, f"roast_{int(time.time())}.wav")
+                
+                import wave
+                with wave.open(speech_file_path, 'wb') as wav_file:
+                    wav_file.setnchannels(1)  # Mono audio
+                    wav_file.setsampwidth(2)  # 2 bytes per sample for PCM16
+                    wav_file.setframerate(24000)  # Sample rate
+                    wav_file.writeframes(pcm_bytes)
+                
+                # Play audio with process tracking
+                if sys.platform == "darwin":  # macOS
+                    self.current_audio_process = subprocess.Popen(['afplay', speech_file_path])
+                elif sys.platform == "win32":  # Windows
+                    self.current_audio_process = subprocess.Popen(['start', speech_file_path], shell=True)
+                else:  # Linux
+                    self.current_audio_process = subprocess.Popen(['xdg-open', speech_file_path])
             
         except Exception as e:
             print(f"Error generating or playing audio: {str(e)}")
@@ -443,8 +475,12 @@ class RoastingMirror:
             elif ord('1') <= key <= ord('5'):
                 self.current_prompt_style = key - ord('0')
                 print(f"\nSwitched to style: {style_names[self.current_prompt_style]}")
+            elif key == ord('c'):  # Add 'c' key to clear audio
+                self._clear_audio()
+                print("\nCleared audio playback")
         
         # Cleanup on exit
+        self._clear_audio()  # Clear audio before closing
         self.camera.release()
         cv2.destroyAllWindows()
 
