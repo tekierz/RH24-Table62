@@ -13,7 +13,7 @@ import sys
 import warnings
 import shutil
 import asyncio
-from discord_bot import bot, TOKEN
+from discord_bot import bot, send_image
 
 class RoastingMirror:
     """
@@ -117,6 +117,9 @@ class RoastingMirror:
         Run the Discord bot in a separate thread
         """
         try:
+            TOKEN = os.getenv('DISCORD_TOKEN')
+            if not TOKEN:
+                print("Error: DISCORD_TOKEN not found in .env file")
             print("[Discord] Attempting to start Discord bot...")
             print(f"[Discord] Using token: {TOKEN[:5]}...{TOKEN[-5:]}")  # Show first/last 5 chars safely
             print(f"[Discord] Bot object status: {bot}")
@@ -306,6 +309,8 @@ class RoastingMirror:
             print("=" * 50)
             print(roast_text)
             print("=" * 50 + "\n")
+
+            asyncio.run(send_image(roast_text, debug_image_path))
             
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
