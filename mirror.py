@@ -19,6 +19,8 @@ import subprocess
 import argparse
 from openai import OpenAI
 import requests
+from ultralytics import YOLO # type: ignore
+from person_detector import PersonDetector
 
 class RoastingMirror:
     """
@@ -38,6 +40,15 @@ class RoastingMirror:
         roast_cooldown (int): Minimum time (seconds) between roasts
     """
 
+    # Define style names as a class variable
+    style_names = {
+        1: "Kind & Child-Friendly",
+        2: "Professional & Balanced",
+        3: "Weather-Aware",
+        4: "Ultra-Critical Expert",
+        5: "Savage Roast Master"
+    }
+
     def __init__(self, use_lambda=False, horizontal_mode=False):
         """
         Initialize the RoastingMirror with all necessary components
@@ -48,10 +59,12 @@ class RoastingMirror:
         """
         print("[Init] Starting initialization...")
         
-        # Store API choice
-        self.use_lambda = use_lambda
+        # Define local model directory
+        self.model_dir = os.path.join(os.path.dirname(__file__), 'models')
+        os.makedirs(self.model_dir, exist_ok=True)
         
-        # Store orientation mode
+        # Store API choice and orientation mode
+        self.use_lambda = use_lambda
         self.horizontal_mode = horizontal_mode
         
         # Initialize OpenAI or Lambda Labs client
@@ -63,7 +76,7 @@ class RoastingMirror:
             self.vision_model = "llama3.2-11b-vision-instruct"
         else:
             self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
-            self.vision_model = "gpt-4o-mini"  # Using shorter model name
+            self.vision_model = "gpt-4o-mini"
         
         # Initialize prompt manager and current prompt style
         self.prompt_manager = PromptManager()
@@ -83,40 +96,46 @@ class RoastingMirror:
         # Load environment variables
         load_dotenv()
         
-        # Suppress CUDA deprecation warnings since we're on CPU anyway
+        # Suppress warnings
         warnings.filterwarnings('ignore', category=FutureWarning)
-        
-        # Define local model directory
-        self.model_dir = os.path.join(os.path.dirname(__file__), 'models')
-        os.makedirs(self.model_dir, exist_ok=True)
         
         # Initialize camera
         self.camera = cv2.VideoCapture(0)
         
-        # Load YOLOv5 model
+        # Load YOLOv11 model
         try:
-            # On Mac, we'll always use CPU
-            self.device = 'cpu'
+            print("\nLoading YOLOv11 model...")
             
-            # Check if model already exists locally
-            model_path = os.path.join(self.model_dir, 'yolov5s.pt')
-            try:
-                print("\nLoading YOLOv5 model from local storage...")
-                self.model = torch.hub.load('ultralytics/yolov5:v6.0', 'custom', 
-                                          path=model_path, force_reload=True)
-            except Exception as local_error:
-                print(f"\nFailed to load local model: {str(local_error)}")
-                print("\nDownloading fresh YOLOv5 model...")
-                self.model = torch.hub.load('ultralytics/yolov5:v6.0', 'yolov5s', 
-                                          pretrained=True, force_reload=True)
-                # Save model for future use
-                torch.save(self.model.state_dict(), model_path)
+            # Set up model paths
+            model_name = "yolo11m.pt"
+            model_path = os.path.join(self.model_dir, model_name)
             
-            self.model.to(self.device)
-            print(f"Successfully loaded YOLOv5 model on CPU!")
+            # Check if model exists locally
+            if not os.path.exists(model_path):
+                print(f"Downloading YOLOv11 model to {model_path}...")
+                # Download model directly without export
+                model = YOLO("yolo11m.pt")
+                # Save the model to our models directory
+                shutil.copy(os.path.join(os.getcwd(), model_name), model_path)
+                print("Model download complete!")
+            else:
+                print("Found existing model in local storage")
+            
+            # Load the model from local path
+            self.model = YOLO(model_path)
+            
+            # Set model parameters
+            self.model.conf = 0.45  # confidence threshold
+            self.model.classes = [0]  # only detect people (class 0)
+            print(f"Successfully loaded YOLOv11 model!")
+            
         except Exception as e:
-            print(f"\nError loading YOLOv5 model: {str(e)}")
+            print(f"\nError loading YOLOv11 model: {str(e)}")
             sys.exit(1)
+        
+        # Initialize face detection
+        cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+        self.face_cascade = cv2.CascadeClassifier(cascade_path)
         
         # Roast cooldown and tracking settings
         self.last_roast_time = 0
@@ -155,6 +174,20 @@ class RoastingMirror:
         # Add roast completion tracking
         self.roast_completed = True  # Track if current roast has finished
         self.skip_current_roast = False  # Flag to skip current roast
+        
+        # Add person tracking attributes
+        self.person_count = 0  # Total number of unique people seen
+        self.current_person_id = None  # ID of the person currently being tracked
+        self.person_image = None  # Store the best image of current person
+        self.person_center_frames = 0  # Count of frames person has been in center
+        self.min_center_frames = 10  # Minimum frames in center before capturing
+        
+        # Initialize person detector
+        self.person_detector = PersonDetector(
+            model=self.model,
+            confidence_threshold=0.45,
+            center_region_scale=0.33
+        )
 
     def _run_discord_bot(self):
         """
@@ -195,105 +228,144 @@ class RoastingMirror:
 
     def detect_person(self, frame):
         """
-        Detect if any person is present in the frame using YOLOv5.
-        Also tracks if the person is in the center and if they've left the frame.
-        Checks if the person is in the foreground based on bounding box size.
-        
-        Args:
-            frame (numpy.ndarray): The input image from camera
-        
-        Returns:
-            bool: True if a new person is detected in the center foreground, False otherwise
+        Detect and track people using YOLOv11
         """
         # Get frame dimensions
         frame_height, frame_width = frame.shape[:2]
         center_x = frame_width // 2
         center_y = frame_height // 2
         
-        # Define center region using scale parameter
+        # Define center region
         center_region_width = int(frame_width * self.center_region_scale)
         center_region_height = int(frame_height * self.center_region_scale)
         
-        # Convert BGR to RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Perform detection without autocast since we're on CPU
-        results = self.model(rgb_frame)
-        
-        person_in_center = False
-        any_person = False
+        # Run YOLOv11 detection
+        results = self.model(frame, verbose=False)
         
         # Process detections
-        detections = results.xyxy[0].cpu().numpy()
+        detected_people = []
         
-        # Minimum size threshold for foreground detection (percentage of frame)
-        min_size_threshold = 0.15  # Person must occupy at least 15% of frame height
+        # Convert frame to grayscale for face detection
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        for detection in detections:
-            if detection[5] == 0:  # class 0 is person in COCO dataset
-                any_person = True
-                confidence = detection[4]
-                if confidence > self.model.conf:
-                    # Draw bounding box
-                    box = detection[:4].astype(int)
+        person_still_in_center = False  # Track if current person is still in center
+        
+        for result in results[0].boxes.data:
+            if int(result[5]) == 0:  # class 0 is person
+                confidence = float(result[4])
+                if confidence > self.confidence_threshold:
+                    box = result[:4].int().tolist()
                     
-                    # Calculate person height relative to frame height
+                    # Calculate metrics
                     person_height = box[3] - box[1]
                     height_ratio = person_height / frame_height
-                    
-                    # Calculate person center
                     person_center_x = (box[0] + box[2]) // 2
                     person_center_y = (box[1] + box[3]) // 2
                     
-                    # Check if person is in center region and foreground
+                    # Check position
                     in_center_x = abs(person_center_x - center_x) < (center_region_width // 2)
                     in_center_y = abs(person_center_y - center_y) < (center_region_height // 2)
-                    in_foreground = height_ratio > min_size_threshold
                     
-                    if in_center_x and in_center_y and in_foreground:
-                        person_in_center = True
-                        cv2.rectangle(frame, 
-                                    (box[0], box[1]), 
-                                    (box[2], box[3]), 
-                                    (0, 255, 0), 2)
-                        # Add foreground indicator
-                        cv2.putText(frame, f"Foreground: {height_ratio:.2f}", 
-                                  (box[0], box[1] - 10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                    else:
-                        cv2.rectangle(frame, 
-                                    (box[0], box[1]), 
-                                    (box[2], box[3]), 
-                                    (255, 165, 0), 2)  # Orange for non-center/background people
+                    # Calculate foreground score (0-100%)
+                    foreground_score = min(100, int((height_ratio / 0.15) * 100))
+                    
+                    # Check for forward-facing face
+                    person_roi = gray[box[1]:box[3], box[0]:box[2]]
+                    faces = self.face_cascade.detectMultiScale(person_roi, 1.1, 4)
+                    facing_forward = len(faces) > 0
+                    
+                    # If this is our current tracked person and they're still in position
+                    if (self.person_present and 
+                        in_center_x and in_center_y and 
+                        facing_forward and 
+                        foreground_score >= 70):
+                        person_still_in_center = True
+                    
+                    # Calculate priority score
+                    priority_score = (
+                        (foreground_score * 0.4) +
+                        ((in_center_x and in_center_y) * 30) +
+                        (facing_forward * 30)
+                    )
+                    
+                    detected_people.append({
+                        'box': box,
+                        'priority_score': priority_score,
+                        'foreground_score': foreground_score,
+                        'facing_forward': facing_forward,
+                        'in_center': in_center_x and in_center_y
+                    })
         
-        # Draw center region
-        cv2.rectangle(frame,
-                     (center_x - center_region_width // 2, center_y - center_region_height // 2),
-                     (center_x + center_region_width // 2, center_y + center_region_height // 2),
-                     (255, 255, 255), 1)
+        # Sort and limit to top 10 people
+        detected_people.sort(key=lambda x: x['priority_score'], reverse=True)
+        detected_people = detected_people[:10]
+        
+        # Draw information for each person
+        for i, person in enumerate(detected_people, 1):
+            box = person['box']
+            color = (0, 255, 0) if person['facing_forward'] else (0, 165, 255)
+            
+            # Draw bounding box
+            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+            
+            # Draw person number and metrics
+            info_text = f"#{i} | FG: {person['foreground_score']}%"
+            if person['facing_forward']:
+                info_text += " | READY"
+            
+            cv2.putText(frame, info_text, 
+                        (box[0], box[1] - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # Update tracking logic
-        if not any_person:
+        if not detected_people or not person_still_in_center:
             self.consecutive_empty_frames += 1
         else:
+            # Check highest priority person for roasting
+            top_person = detected_people[0]
+            if (top_person['in_center'] and 
+                top_person['facing_forward'] and 
+                top_person['foreground_score'] >= 70):
+                
+                if not self.person_present:
+                    self.person_count += 1
+                    self.current_person_id = self.person_count
+                    self.person_present = True
+                    self.person_image = frame.copy()
+                    print(f"\n[Debug] New person #{self.current_person_id} captured")
+                    return True
+            
             self.consecutive_empty_frames = 0
         
-        # Reset person_present if the frame has been empty for enough consecutive frames
+        # Only reset tracking when person has actually left
         if self.consecutive_empty_frames >= self.consecutive_frames_threshold:
-            self.person_present = False
+            if self.person_present:
+                print(f"\n[Debug] Person #{self.current_person_id} has left the scene")
+                self.current_person_id = None
+                self.person_present = False
+                self.person_image = None
+                self.last_roast_time = 0  # Reset timer only when person leaves
             self.consecutive_empty_frames = 0
         
-        # Determine if this is a new person to roast
-        should_roast = person_in_center and not self.person_present
-        if person_in_center:
-            self.person_present = True
+        # Draw status overlay
+        status_text = f"Current: #{self.current_person_id} | " if self.current_person_id else ""
+        if self.person_present:
+            if person_still_in_center:
+                status_text += "Person still in frame - waiting for exit"
+                # Don't show cooldown timer while person is still in frame
+            else:
+                status_text += "Roasted - waiting for complete exit"
+                # Show cooldown timer only when person has moved from center
+                time_remaining = max(0, self.roast_cooldown - (time.time() - self.last_roast_time))
+                cv2.putText(frame, f"Next capture in: {int(time_remaining)}s", 
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        else:
+            status_text += "Ready for new person"
         
-        # Add status overlay
-        status_text = "Ready for new person" if not self.person_present else "Waiting for person to leave"
         cv2.putText(frame, status_text, (10, 90), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
-        return should_roast
+        return False
 
     def _clear_audio(self):
         """
@@ -338,8 +410,7 @@ class RoastingMirror:
                     messages=[
                         {
                             "role": "system",
-                            "content": """You are a brutally honest Americanfashion reality TV judge 
-                                with a over dramatic fake British accent. Be theatrical and flamboyant!"""
+                            "content": self.prompt_manager.get_audio_system_prompt()
                         },
                         {
                             "role": "user",
@@ -509,15 +580,6 @@ class RoastingMirror:
             print("=" * 50 + "\n")
 
             asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
-
-
-
-
-
-
-
-
-
             
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
@@ -541,29 +603,28 @@ class RoastingMirror:
 
     def _start_roast_generation(self, frame):
         """
-        Start a separate thread to handle roast generation so the main loop doesn't freeze.
-        
-        Args:
-            frame (numpy.ndarray): The current camera frame
+        Start a separate thread to handle roast generation.
+        Now uses the stored best image of the person.
         """
-        ret, encoded_image = cv2.imencode(".jpg", frame)
+        if self.person_image is None:
+            print("No valid person image captured for roasting.")
+            return
+            
+        ret, encoded_image = cv2.imencode(".jpg", self.person_image)
         if not ret:
             print("Failed to encode image for roast generation.")
             return
         
         image_data = base64.b64encode(encoded_image).decode('utf-8')
         
-
-
-
-
         self.roast_thread = threading.Thread(
             target=self._roast_worker, 
             args=(image_data,)
         )
         self.roast_thread.daemon = True
         self.roast_thread.start()
-    
+        self.last_roast_time = time.time()
+
     def run(self):
         """
         Main application loop for the RoastingMirror.
@@ -599,99 +660,88 @@ class RoastingMirror:
         while True:
             ret, frame = self.camera.read()
             if not ret:
-                print("Camera frame capture failed.")
                 break
             
-            # Only rotate if we're in vertical mode
+            # Flip and rotate frame if needed
             if not self.horizontal_mode:
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-            
-            # Flip horizontally for mirror effect
             mirror_frame = cv2.flip(frame, 1)
             
-            # Detect person (store result but don't use it directly)
-            _ = self.detect_person(mirror_frame)
+            # Process frame
+            detected_people, status = self.person_detector.process_frame(mirror_frame)
             
-            # Display current critic style
-            style_names = {
-                1: "Kind & Child-Friendly",
-                2: "Professional & Balanced",
-                3: "Weather-Aware",
-                4: "Ultra-Critical Expert",
-                5: "Savage Roast Master"
-            }
-            cv2.putText(mirror_frame, f"Style: {style_names[self.current_prompt_style]}", 
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            # Check if should trigger roast
+            should_roast, person_image = self.person_detector.should_trigger_roast()
+            if should_roast:
+                self._start_roast_generation(person_image)
             
-            # Display detection parameters
-            cv2.putText(mirror_frame, f"Conf: {self.confidence_threshold:.2f}", 
-                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(mirror_frame, f"Region: {self.center_region_scale:.2f}", 
-                        (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            
-            # Check cooldown and roast availability
-            current_time = time.time()
-            if (current_time - self.last_roast_time >= self.roast_cooldown
-                and not self.roast_in_progress
-                and self.roast_completed):
-                
-                print("Person detected! Generating roast asynchronously...")
-                self._start_roast_generation(frame)  # send the unflipped frame
-                self.last_roast_time = current_time
-            
-            # Check if any new roasts are returned by the background thread
-            while not self.roast_queue.empty():
-                roast_text = self.roast_queue.get()
-                print(f"Roast text from background: {roast_text}")
-            
-            # Display cooldown timer
-            time_remaining = max(0, self.roast_cooldown - (current_time - self.last_roast_time))
-            cv2.putText(mirror_frame, f"Next roast in: {int(time_remaining)}s", 
-                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
-            # Show the resulting frame
-            cv2.imshow("Miragé (YOLOv5)", mirror_frame)
+            # Draw UI
+            self._draw_ui(mirror_frame, detected_people, status)
             
             # Handle key presses
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q'):
+            if not self._handle_keys():
                 break
-            elif key == ord(' '):  # Space bar press
-                if (current_time - self.last_roast_time >= self.roast_cooldown 
-                    and not self.roast_in_progress 
-                    and self.roast_completed):  # Only trigger if previous roast completed
-                    print("Manual trigger activated! Generating roast...")
-                    self._start_roast_generation(frame)
-                    self.last_roast_time = current_time
-                else:
-                    if not self.roast_completed:
-                        print("Please wait for current roast to complete")
-                    elif not current_time - self.last_roast_time >= self.roast_cooldown:
-                        print("Please wait for cooldown to finish")
-            elif key == 8:  # Backspace key
+        
+        # Cleanup
+        self._cleanup()
+
+    def _draw_ui(self, frame, detected_people, status):
+        # Display current critic style
+        cv2.putText(frame, f"Style: {self.style_names[self.current_prompt_style]}", 
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # Display detection parameters
+        cv2.putText(frame, f"Conf: {self.confidence_threshold:.2f}", 
+                    (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(frame, f"Region: {self.center_region_scale:.2f}", 
+                    (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        # Display status message
+        cv2.putText(frame, status, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # Show the resulting frame
+        cv2.imshow("Miragé (YOLOv5)", frame)
+
+    def _handle_keys(self):
+        # Handle key presses
+        key = cv2.waitKey(1) & 0xFF
+        if key == ord('q'):
+            return False
+        elif key == ord(' '):  # Space bar press
+            if (time.time() - self.last_roast_time >= self.roast_cooldown 
+                and not self.roast_in_progress 
+                and self.roast_completed):  # Only trigger if previous roast completed
+                print("Manual trigger activated! Generating roast...")
+                self._start_roast_generation(self.person_image)
+                self.last_roast_time = time.time()
+            else:
                 if not self.roast_completed:
-                    print("Skipping current roast...")
-                    self.skip_current_roast = True
-                    self.roast_completed = True  # Mark as completed when skipping
-            elif key == ord('['):
-                self.adjust_confidence(-0.05)
-            elif key == ord(']'):
-                self.adjust_confidence(0.05)
-            elif key == ord('-'):
-                self.adjust_center_region(-0.05)
-            elif key == ord('=') or key == ord('+'):  # Both - and = keys work
-                self.adjust_center_region(0.05)
-            elif ord('1') <= key <= ord('5'):
-                self.current_prompt_style = key - ord('0')
-                print(f"\nSwitched to style: {style_names[self.current_prompt_style]}")
-            elif key == ord('c'):
-                self._clear_audio()
-                print("\nCleared audio playback")
+                    print("Please wait for current roast to complete")
+                elif not time.time() - self.last_roast_time >= self.roast_cooldown:
+                    print("Please wait for cooldown to finish")
+        elif key == 8:  # Backspace key
+            if not self.roast_completed:
+                print("Skipping current roast...")
+                self.skip_current_roast = True
+                self.roast_completed = True  # Mark as completed when skipping
+        elif key == ord('['):
+            self.adjust_confidence(-0.05)
+        elif key == ord(']'):
+            self.adjust_confidence(0.05)
+        elif key == ord('-'):
+            self.adjust_center_region(-0.05)
+        elif key == ord('=') or key == ord('+'):  # Both - and = keys work
+            self.adjust_center_region(0.05)
+        elif ord('1') <= key <= ord('5'):
+            self.current_prompt_style = key - ord('0')
+            print(f"\nSwitched to style: {self.style_names[self.current_prompt_style]}")
+        elif key == ord('c'):
+            self._clear_audio()
+            print("\nCleared audio playback")
         
-            # Check if current roast is completed
-            if self.roast_completed:
-                print("Current roast completed. Waiting for next roast.")
-        
+        return True
+
+    def _cleanup(self):
         # Cleanup on exit
         self._clear_audio()  # Clear audio before closing
         self.camera.release()
