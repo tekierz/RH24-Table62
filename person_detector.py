@@ -77,44 +77,47 @@ class PersonDetector:
         center_x = frame_width // 2
         center_y = frame_height // 2
 
-        # Store original frame for display/capture
+        # Store original frame for capture BEFORE any modifications
+        original_frame = frame.copy()
+        
+        # Create separate display frame for overlays
         display_frame = frame.copy()
         
         # Convert BGR to RGB only for YOLO detection
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
         
         # Define center region
         center_region_width = int(frame_width * self.center_region_scale)
         center_region_height = int(frame_height * self.center_region_scale)
         
-        # Draw center region if debug enabled
+        # Draw center region if debug enabled - on display frame only
         if self.show_detection_info:
-            cv2.rectangle(frame,
+            cv2.rectangle(display_frame,
                          (center_x - center_region_width//2, center_y - center_region_height//2),
                          (center_x + center_region_width//2, center_y + center_region_height//2),
                          (0, 255, 0), 2)
         
         # Run YOLOv11 detection
-        results = self.model(frame, verbose=False)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        results = self.model(rgb_frame, verbose=False)
+        gray = cv2.cvtColor(display_frame, cv2.COLOR_BGR2GRAY)
         
         detected_people = []
         person_still_in_center = False
         
-        # Process detections
+        # Process detections - draw only on display frame
         for result in results[0].boxes.data:
             if int(result[5]) == 0:  # class 0 is person
                 confidence = float(result[4])
                 if confidence > self.confidence_threshold:
                     box = result[:4].int().tolist()
-                    person = self._process_detection(frame, gray, box, 
+                    person = self._process_detection(display_frame, gray, box, 
                                                   center_x, center_y,
                                                   center_region_width, 
                                                   center_region_height)
                     detected_people.append(person)
                     
                     if self.show_detection_info:
-                        self._draw_detection_info(frame, person, box)
+                        self._draw_detection_info(display_frame, person, box)
                     
                     if (person.in_center and 
                         person.facing_forward and 
@@ -124,8 +127,8 @@ class PersonDetector:
         # Sort by priority score
         detected_people.sort(key=lambda x: x.priority_score, reverse=True)
         
-        # Update tracking state and get status
-        status = self._update_tracking_state(detected_people, person_still_in_center, frame)
+        # Update tracking state using original frame for capture
+        status = self._update_tracking_state(detected_people, person_still_in_center, original_frame)
         
         return detected_people, status
     
@@ -178,36 +181,22 @@ class PersonDetector:
                     self.last_person_exit_time = current_time
                     self.person_present = False
                     self.current_person_id = None
-                    # Don't clear person_image here - keep it for the roast
         else:
             top_person = detected_people[0]
-            
-            # Debug print for detection criteria
-            if self.debug:
-                self.logger.debug(
-                    f"Detection: in_center={top_person.in_center}, "
-                    f"facing_forward={top_person.facing_forward}, "
-                    f"foreground_score={top_person.foreground_score}"
-                )
             
             if (top_person.in_center and 
                 top_person.facing_forward and 
                 top_person.foreground_score >= 70):
                 
                 if not self.person_present:
-                    self.logger.info("New person detected!")  # Keep this as INFO level
+                    self.logger.info("New person detected!")
                     self.person_count += 1
                     self.current_person_id = self.person_count
                     self.person_present = True
                 
-                # Always update the person image when criteria are met
-                if self.debug:
-                    self.logger.debug("Capturing new person image")
+                # Store the original clean frame
                 self.person_image = frame.copy()
                 self.consecutive_empty_frames = 0
-            else:
-                # Only increment empty frames if person doesn't meet criteria
-                self.consecutive_empty_frames += 1
         
         return self._generate_status_message(person_still_in_center, current_time)
     

@@ -235,10 +235,20 @@ class RoastingMirror:
         self.center_region_scale = max(0.1, min(0.9, self.center_region_scale + delta))
         self.logger.info(f"\nCenter region scale adjusted to: {self.center_region_scale:.2f}")
 
-    def detect_person(self, frame):
+    def detect_person(self, frame, draw_overlay=True):
         """
         Detect and track people using YOLOv11
+        
+        Args:
+            frame (numpy.ndarray): Input frame to process
+            draw_overlay (bool): Whether to draw detection overlays on the frame
+            
+        Returns:
+            tuple: (should_trigger, processed_frame)
         """
+        # Create a copy for display if drawing overlays
+        display_frame = frame.copy() if draw_overlay else frame
+        
         # Get frame dimensions
         frame_height, frame_width = frame.shape[:2]
         center_x = frame_width // 2
@@ -248,11 +258,12 @@ class RoastingMirror:
         center_region_width = int(frame_width * self.center_region_scale)
         center_region_height = int(frame_height * self.center_region_scale)
         
-        # Draw center region rectangle for debugging
-        cv2.rectangle(frame,
-                     (center_x - center_region_width//2, center_y - center_region_height//2),
-                     (center_x + center_region_width//2, center_y + center_region_height//2),
-                     (0, 255, 0), 2)
+        # Draw center region rectangle only if overlay is enabled
+        if draw_overlay:
+            cv2.rectangle(display_frame,
+                         (center_x - center_region_width//2, center_y - center_region_height//2),
+                         (center_x + center_region_width//2, center_y + center_region_height//2),
+                         (0, 255, 0), 2)
         
         # Run YOLOv11 detection
         results = self.model(frame, verbose=False)
@@ -273,8 +284,8 @@ class RoastingMirror:
                 if confidence > self.confidence_threshold:
                     box = result[:4].int().tolist()
                     
-                    # Calculate metrics
-                    person_height = box[3] - box[1]
+                    # Calculate height ratio (add person_height definition)
+                    person_height = box[3] - box[1]  # Height of bounding box
                     height_ratio = person_height / frame_height
                     person_center_x = (box[0] + box[2]) // 2
                     person_center_y = (box[1] + box[3]) // 2
@@ -312,7 +323,6 @@ class RoastingMirror:
                         'facing_forward': facing_forward,
                         'in_center': in_center_x and in_center_y
                     }
-                    
                     detected_people.append(person_data)
                     
                     # Track best person
@@ -322,12 +332,12 @@ class RoastingMirror:
                     
                     # Draw bounding box and info
                     color = (0, 255, 0) if facing_forward else (0, 165, 255)
-                    cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+                    cv2.rectangle(display_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
                     
                     info_text = f"Score: {int(priority_score)} | FG: {foreground_score}%"
                     if facing_forward:
                         info_text += " | READY"
-                    cv2.putText(frame, info_text, 
+                    cv2.putText(display_frame, info_text, 
                               (box[0], box[1] - 10),
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
@@ -351,12 +361,11 @@ class RoastingMirror:
         
         # Reset tracking when person has left
         if self.consecutive_empty_frames >= self.consecutive_frames_threshold:
-            if self.person_present:
-                self.logger.info(f"\n[Debug] Person #{self.current_person_id} has left the scene")
-                self.current_person_id = None
-                self.person_present = False
-                self.person_image = None
-                self.last_roast_time = 0
+            self.logger.info(f"\n[Debug] Person #{self.current_person_id} has left the scene")
+            self.current_person_id = None
+            self.person_present = False
+            self.person_image = None
+            self.last_roast_time = 0
             self.consecutive_empty_frames = 0
         
         # Draw status overlay
@@ -364,17 +373,31 @@ class RoastingMirror:
         status_text += f"Current: #{self.current_person_id} | " if self.current_person_id else "Ready | "
         status_text += "Processing..." if self.roast_in_progress else "Waiting..."
         
-        cv2.putText(frame, status_text, (10, 30), 
+        cv2.putText(display_frame, status_text, (10, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         # Draw cooldown timer if applicable
         if self.last_roast_time > 0:
             time_remaining = max(0, self.roast_cooldown - (time.time() - self.last_roast_time))
             if time_remaining > 0:
-                cv2.putText(frame, f"Next capture in: {int(time_remaining)}s", 
+                cv2.putText(display_frame, f"Next capture in: {int(time_remaining)}s", 
                             (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
-        return should_trigger
+        # Only draw detection visualization if overlay is enabled
+        if draw_overlay:
+            for person in detected_people:
+                box = person['box']
+                color = (0, 255, 0) if person['facing_forward'] else (0, 165, 255)
+                cv2.rectangle(display_frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+                
+                info_text = f"Score: {int(person['priority_score'])} | FG: {person['foreground_score']}%"
+                if person['facing_forward']:
+                    info_text += " | READY"
+                cv2.putText(display_frame, info_text, 
+                          (box[0], box[1] - 10),
+                          cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+        
+        return should_trigger, display_frame if draw_overlay else frame
 
     def _clear_audio(self):
         """
@@ -645,12 +668,109 @@ class RoastingMirror:
         bgr_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
         # Encode image to JPEG format
-        _, buffer = cv2.imencode('.jpg', bgr_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        
+        _, buffer = cv2.imencode('.jpg', bgr_image, [cv2.IMWRITE_JPEG_QUALITY, 85])     
         # Convert to base64 string
-        base64_image = base64.b64encode(buffer).decode('utf-8')
-        
+        base64_image = base64.b64encode(buffer).decode('utf-8')    
         return base64_image
+
+    def _extract_keywords_gpt(self, text):
+        """
+        Extract key words from the roast text using GPT
+        
+        Args:
+            text (str): The roast text to analyze
+            
+        Returns:
+            list: List of extracted keywords
+        """
+        try:
+            # Create prompt for keyword extraction
+            prompt = (
+                "Extract exactly 5 of the most impactful single words from this fashion critique. "
+                "Respond with ONLY the 5 words in lowercase, separated by commas (no spaces). "
+                "Example format: vintage,bold,classy,elegant,unique\n\n"
+                f"Text: {text}"
+            )
+            
+            # Make API request
+            response = self.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "You are a keyword extraction specialist."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=50,
+                temperature=0.3
+            )
+            
+            # Get keywords from response
+            keywords_text = response.choices[0].message.content.strip()
+            keywords = keywords_text.split(',')
+            
+            # Ensure we have exactly 5 keywords
+            keywords = keywords[:5]
+            while len(keywords) < 5:
+                keywords.append("")
+            
+            self.logger.info(f"[Keywords] Extracted: {', '.join(keywords)}")
+            return keywords
+        
+        except Exception as e:
+            self.logger.error(f"Error extracting keywords with GPT: {str(e)}")
+            return ["", "", "", "", ""]  # Return empty keywords on error
+
+    def _draw_keywords(self, frame, keywords):
+        """
+        Draw keywords at the bottom of the frame with improved spacing
+        
+        Args:
+            frame (numpy.ndarray): The image frame
+            keywords (list): List of keywords to display
+        """
+        try:
+            frame_height, frame_width = frame.shape[:2]
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            font_scale = 1.2
+            font_thickness = 2
+            
+            # Calculate total width needed
+            total_width = 0
+            keyword_widths = []
+            for keyword in keywords:
+                (width, height) = cv2.getTextSize(keyword.upper(), font, font_scale, font_thickness)[0]
+                keyword_widths.append(width)
+                total_width += width
+            
+            # Calculate spacing between words to distribute them evenly
+            spacing = (frame_width - total_width) / (len(keywords) + 1)
+            
+            # Draw semi-transparent background
+            overlay = frame.copy()
+            background_height = 60  # Increased height for background
+            cv2.rectangle(overlay, 
+                         (0, frame_height - background_height),
+                         (frame_width, frame_height),
+                         (0, 0, 0),
+                         -1)
+            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
+            
+            # Draw each keyword
+            current_x = spacing  # Start after first spacing
+            y_position = frame_height - (background_height // 2) + 10  # Centered in background
+            
+            for i, keyword in enumerate(keywords):
+                # Draw text with outline for better visibility
+                text = keyword.upper()
+                cv2.putText(frame, text,
+                          (int(current_x), y_position),
+                          font, font_scale, (0, 0, 0), font_thickness + 2)
+                cv2.putText(frame, text,
+                          (int(current_x), y_position),
+                          font, font_scale, (255, 255, 255), font_thickness)
+                current_x += keyword_widths[i] + spacing
+            
+        except Exception as e:
+            self.logger.error(f"Error drawing keywords: {str(e)}")
 
     def run(self):
         """
@@ -699,15 +819,19 @@ class RoastingMirror:
                 frame = cv2.flip(frame, 0)  # Flip vertically to correct orientation
             
             # Process frame for person detection (YOLO expects BGR)
-            should_roast = self.detect_person(frame)
+            should_roast, display_frame = self.detect_person(frame.copy(), draw_overlay=True)
+            frame = display_frame  # Use the display frame for live view
+            
+            # When capturing for Discord, use the original clean frame
+            if should_roast:
+                # Store the original frame without any overlays for Discord
+                self.person_image = cv2.cvtColor(frame.copy(), cv2.COLOR_BGR2RGB)
             
             # Generate roast if conditions are met
             if (should_roast and 
                 time.time() - self.last_roast_time >= self.roast_cooldown and 
                 not self.roast_in_progress and 
                 self.roast_completed):
-                # Store RGB version for roast generation
-                self.person_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 self._start_roast_generation(self.person_image)
                 self.last_roast_time = time.time()
             
