@@ -15,7 +15,7 @@ class DetectedPerson:
     image: Optional[np.ndarray] = None
 
 class PersonDetector:
-    """Handles person detection, tracking, and trigger logic"""
+    """Handles person detection, tracking, and trigger logic for YOLOv11"""
     
     def __init__(self, model, confidence_threshold=0.45, center_region_scale=0.33):
         self.model = model
@@ -32,7 +32,7 @@ class PersonDetector:
         self.person_count = 0
         self.person_image = None
         self.consecutive_empty_frames = 0
-        self.consecutive_frames_threshold = 90  # Increased to 3 seconds at 30fps
+        self.consecutive_frames_threshold = 90  # 3 seconds at 30fps
         self.last_person_exit_time = 0
         self.exit_cooldown = 3  # 3 second cooldown after person leaves
         self.last_roast_time = 0
@@ -51,48 +51,37 @@ class PersonDetector:
         self.center_region_scale = max(0.1, min(0.9, self.center_region_scale + delta))
     
     def should_trigger_roast(self) -> Tuple[bool, Optional[np.ndarray]]:
-        """Check if we should trigger a new roast based on timing conditions"""
+        """Check if conditions are met to trigger a new roast"""
         current_time = time.time()
         
-        # Only allow new roast if:
-        # 1. Previous person has been gone for exit_cooldown seconds
-        # 2. Roast cooldown has expired
-        # 3. We have a valid person image
         if (current_time - self.last_person_exit_time >= self.exit_cooldown and
             current_time - self.last_roast_time >= self.roast_cooldown and 
             self.person_image is not None):
+            
+            captured_image = self.person_image.copy()
             self.last_roast_time = current_time
-            return True, self.person_image
+            return True, captured_image
+            
         return False, None
     
     def process_frame(self, frame: np.ndarray) -> Tuple[List[DetectedPerson], str]:
-        """
-        Process a frame and return detected people and status message
-        """
+        """Process a frame and return detected people and status message"""
         frame_height, frame_width = frame.shape[:2]
         center_x = frame_width // 2
         center_y = frame_height // 2
         
-        # Define and draw center region
+        # Define center region
         center_region_width = int(frame_width * self.center_region_scale)
         center_region_height = int(frame_height * self.center_region_scale)
         
+        # Draw center region if debug enabled
         if self.show_detection_info:
-            # Draw center region rectangle
             cv2.rectangle(frame,
                          (center_x - center_region_width//2, center_y - center_region_height//2),
                          (center_x + center_region_width//2, center_y + center_region_height//2),
                          (0, 255, 0), 2)
-            
-            # Draw detection parameters and debug info
-            cv2.putText(frame, f"Conf: {self.confidence_threshold:.2f}", 
-                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(frame, f"Region: {self.center_region_scale:.2f}", 
-                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.putText(frame, f"Empty Frames: {self.consecutive_empty_frames}", 
-                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
-        # Run detection
+        # Run YOLOv11 detection
         results = self.model(frame, verbose=False)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
@@ -111,50 +100,44 @@ class PersonDetector:
                                                   center_region_height)
                     detected_people.append(person)
                     
-                    # Draw debug info for each detection
                     if self.show_detection_info:
-                        color = (0, 255, 0) if person.facing_forward else (0, 165, 255)
-                        cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
-                        info_text = f"FG: {person.foreground_score}% | {'READY' if person.facing_forward else 'NO FACE'}"
-                        cv2.putText(frame, info_text, (box[0], box[1] - 10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        self._draw_detection_info(frame, person, box)
                     
-                    # Check if this person meets all criteria
                     if (person.in_center and 
                         person.facing_forward and 
                         person.foreground_score >= 70):
                         person_still_in_center = True
         
-        # Sort detected people by priority score
+        # Sort by priority score
         detected_people.sort(key=lambda x: x.priority_score, reverse=True)
         
-        # Update tracking state
-        status_message = self._update_tracking_state(detected_people, 
-                                                   person_still_in_center, 
-                                                   frame)
+        # Update tracking state and get status
+        status = self._update_tracking_state(detected_people, person_still_in_center, frame)
         
-        return detected_people, status_message
+        return detected_people, status
     
     def _process_detection(self, frame, gray, box, center_x, center_y, 
-                          center_region_width, center_region_height) -> DetectedPerson:
-        """Process a single detection and return a DetectedPerson object"""
+                         center_region_width, center_region_height) -> DetectedPerson:
+        """Process individual detection and calculate metrics"""
+        # Calculate metrics
         person_height = box[3] - box[1]
         height_ratio = person_height / frame.shape[0]
         person_center_x = (box[0] + box[2]) // 2
         person_center_y = (box[1] + box[3]) // 2
         
-        # Make center region check more lenient
+        # Check position
         in_center_x = abs(person_center_x - center_x) < (center_region_width * 0.6)
         in_center_y = abs(person_center_y - center_y) < (center_region_height * 0.6)
         
-        # Adjust foreground score calculation
-        foreground_score = min(100, int((height_ratio / 0.12) * 100))  # Made more lenient
+        # Calculate foreground score
+        foreground_score = min(100, int((height_ratio / 0.12) * 100))
         
-        # Make face detection more lenient
+        # Check for face
         person_roi = gray[box[1]:box[3], box[0]:box[2]]
-        faces = self.face_cascade.detectMultiScale(person_roi, 1.3, 3)  # Adjusted parameters
+        faces = self.face_cascade.detectMultiScale(person_roi, 1.3, 3)
         facing_forward = len(faces) > 0
         
+        # Calculate priority score
         priority_score = (
             (foreground_score * 0.4) +
             ((in_center_x and in_center_y) * 30) +
@@ -229,3 +212,21 @@ class PersonDetector:
                 status += "Ready for New Person"
         
         return status
+
+    def _draw_detection_info(self, frame, person: DetectedPerson, box: List[int]) -> None:
+        """Draw detection information on frame"""
+        # Draw bounding box
+        color = (0, 255, 0) if person.in_center else (255, 165, 0)
+        cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+        
+        # Draw detection info if enabled
+        if self.show_detection_info:
+            y_offset = box[1] - 10
+            cv2.putText(frame, f"Score: {person.priority_score:.1f}", 
+                      (box[0], y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            y_offset -= 20
+            cv2.putText(frame, f"Foreground: {person.foreground_score:.0f}%", 
+                      (box[0], y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            y_offset -= 20
+            cv2.putText(frame, f"Face: {'Yes' if person.facing_forward else 'No'}", 
+                      (box[0], y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)

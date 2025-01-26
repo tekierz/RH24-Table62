@@ -132,7 +132,6 @@ class RoastingMirror:
         except Exception as e:
             print(f"\nError loading YOLOv11 model: {str(e)}")
             sys.exit(1)
-        
         # Initialize face detection
         cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
         self.face_cascade = cv2.CascadeClassifier(cascade_path)
@@ -173,8 +172,7 @@ class RoastingMirror:
         
         # Add roast completion tracking
         self.roast_completed = True  # Track if current roast has finished
-        self.skip_current_roast = False  # Flag to skip current roast
-        
+        self.skip_current_roast = False
         # Add person tracking attributes
         self.person_count = 0  # Total number of unique people seen
         self.current_person_id = None  # ID of the person currently being tracked
@@ -699,8 +697,7 @@ class RoastingMirror:
                     print("No valid person image available for roasting")
             
             # Draw status overlay
-            cv2.putText(mirror_frame, status, 
-                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            self._draw_ui(mirror_frame, detected_people, status)
             
             # Show the frame
             cv2.imshow("Miragé", mirror_frame)
@@ -712,21 +709,48 @@ class RoastingMirror:
         self._cleanup()
 
     def _draw_ui(self, frame, detected_people, status):
-        # Display current critic style
+        """Draw UI elements with proper spacing and positioning"""
+        frame_height, frame_width = frame.shape[:2]
+        
+        # Define consistent spacing and positioning
+        margin = 20
+        line_height = 30
+        font_scale = 0.7
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        
+        # Top-left information block
+        y_pos = margin
+        
+        # Style indicator
         cv2.putText(frame, f"Style: {self.style_names[self.current_prompt_style]}", 
-                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    (margin, y_pos), font, font_scale, (0, 255, 0), 2)
+        y_pos += line_height
         
-        # Display detection parameters
-        cv2.putText(frame, f"Conf: {self.confidence_threshold:.2f}", 
-                    (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Region: {self.center_region_scale:.2f}", 
-                    (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        # Detection parameters
+        cv2.putText(frame, f"Confidence: {self.confidence_threshold:.2f}", 
+                    (margin, y_pos), font, font_scale, (0, 255, 0), 2)
+        y_pos += line_height
         
-        # Display status message
-        cv2.putText(frame, status, (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(frame, f"Region Size: {self.center_region_scale:.2f}", 
+                    (margin, y_pos), font, font_scale, (0, 255, 0), 2)
+        y_pos += line_height * 2  # Extra spacing before status
         
-        # Show the resulting frame
-        cv2.imshow("Miragé (YOLOv5)", frame)
+        # Status message (with background for better readability)
+        status_size = cv2.getTextSize(status, font, font_scale, 2)[0]
+        cv2.rectangle(frame, 
+                     (margin-5, y_pos-20), 
+                     (margin + status_size[0]+5, y_pos+5),
+                     (0, 0, 0), -1)
+        cv2.putText(frame, status, (margin, y_pos), font, font_scale, (0, 255, 0), 2)
+        
+        # Show cooldown timer at bottom of frame if applicable
+        if self.last_roast_time > 0:
+            cooldown = max(0, self.roast_cooldown - (time.time() - self.last_roast_time))
+            if cooldown > 0:
+                timer_text = f"Next roast in: {int(cooldown)}s"
+                cv2.putText(frame, timer_text,
+                           (margin, frame_height - margin),
+                           font, font_scale, (0, 255, 0), 2)
 
     def _handle_keys(self):
         # Handle key presses
