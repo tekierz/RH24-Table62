@@ -601,29 +601,47 @@ class RoastingMirror:
         finally:
             self.roast_in_progress = False
 
-    def _start_roast_generation(self, frame):
-        """
-        Start a separate thread to handle roast generation.
-        Now uses the stored best image of the person.
-        """
-        if self.person_image is None:
+    def _start_roast_generation(self, image):
+        """Start the roast generation process with the given image"""
+        if image is None:
             print("No valid person image captured for roasting.")
             return
-            
-        ret, encoded_image = cv2.imencode(".jpg", self.person_image)
-        if not ret:
-            print("Failed to encode image for roast generation.")
-            return
         
-        image_data = base64.b64encode(encoded_image).decode('utf-8')
+        print("Starting roast generation...")
+        self.roast_in_progress = True
+        self.roast_completed = False
         
+        # Create a copy of the image for the roast thread
+        roast_image = image.copy()
+        
+        # Start the roast generation in a new thread
         self.roast_thread = threading.Thread(
-            target=self._roast_worker, 
-            args=(image_data,)
+            target=self._roast_worker,
+            args=(self._encode_image(roast_image),)
         )
         self.roast_thread.daemon = True
         self.roast_thread.start()
-        self.last_roast_time = time.time()
+
+    def _encode_image(self, image):
+        """
+        Encode an OpenCV image to base64 string for API requests
+        
+        Args:
+            image (numpy.ndarray): OpenCV image in BGR format
+            
+        Returns:
+            str: Base64 encoded image string
+        """
+        # Convert image from BGR to RGB
+        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        # Encode image to JPEG format
+        _, buffer = cv2.imencode('.jpg', rgb_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        
+        # Convert to base64 string
+        base64_image = base64.b64encode(buffer).decode('utf-8')
+        
+        return base64_image
 
     def run(self):
         """
@@ -640,7 +658,7 @@ class RoastingMirror:
         
         The loop continues until the user presses 'q' to quit.
         """
-        print("Starting Miragé - The Roasting Smart Mirror (YOLOv5 Edition)")
+        print("Starting Miragé - The Roasting Smart Mirror (YOLOv11 Edition)")
         print("Press 'q' to quit")
         print(f"\nOrientation: {'Horizontal' if self.horizontal_mode else 'Vertical'}")
         print("\nDetection Controls:")
@@ -660,29 +678,37 @@ class RoastingMirror:
         while True:
             ret, frame = self.camera.read()
             if not ret:
+                print("Camera frame capture failed.")
                 break
             
-            # Flip and rotate frame if needed
+            # Process frame orientation
             if not self.horizontal_mode:
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             mirror_frame = cv2.flip(frame, 1)
             
-            # Process frame
+            # Process frame through person detector
             detected_people, status = self.person_detector.process_frame(mirror_frame)
             
             # Check if should trigger roast
             should_roast, person_image = self.person_detector.should_trigger_roast()
-            if should_roast:
-                self._start_roast_generation(person_image)
+            if should_roast and not self.roast_in_progress:
+                if person_image is not None:
+                    print("Starting roast generation with captured image")
+                    self._start_roast_generation(person_image)
+                else:
+                    print("No valid person image available for roasting")
             
-            # Draw UI
-            self._draw_ui(mirror_frame, detected_people, status)
+            # Draw status overlay
+            cv2.putText(mirror_frame, status, 
+                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            # Show the frame
+            cv2.imshow("Miragé", mirror_frame)
             
             # Handle key presses
             if not self._handle_keys():
                 break
         
-        # Cleanup
         self._cleanup()
 
     def _draw_ui(self, frame, detected_people, status):
