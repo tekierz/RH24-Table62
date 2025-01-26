@@ -123,9 +123,17 @@ class RoastingMirror:
         self.roast_in_progress = False
         self.roast_thread = None
         
+        # YOLO detection parameters
+        self.confidence_threshold = 0.45  # Default confidence threshold
+        self.center_region_scale = 0.33  # Default center region size (1/3 of frame)
+        
         # Set model parameters
-        self.model.conf = 0.45  # confidence threshold
+        self.model.conf = self.confidence_threshold  # confidence threshold
         self.model.classes = [0]  # only detect people (class 0 in COCO dataset)
+        
+        # Add roast completion tracking
+        self.roast_completed = True  # Track if current roast has finished
+        self.skip_current_roast = False  # Flag to skip current roast
 
     def _run_discord_bot(self):
         """
@@ -143,25 +151,47 @@ class RoastingMirror:
             print(f"[Discord] Error starting Discord bot: {str(e)}")
             print(f"[Discord] Full error details: {repr(e)}")
 
+    def adjust_confidence(self, delta):
+        """
+        Adjust the confidence threshold for YOLO detection
+        
+        Args:
+            delta (float): Amount to adjust confidence by (positive or negative)
+        """
+        self.confidence_threshold = max(0.1, min(0.9, self.confidence_threshold + delta))
+        self.model.conf = self.confidence_threshold
+        print(f"\nConfidence threshold adjusted to: {self.confidence_threshold:.2f}")
+
+    def adjust_center_region(self, delta):
+        """
+        Adjust the size of the center detection region
+        
+        Args:
+            delta (float): Amount to adjust region scale by (positive or negative)
+        """
+        self.center_region_scale = max(0.1, min(0.9, self.center_region_scale + delta))
+        print(f"\nCenter region scale adjusted to: {self.center_region_scale:.2f}")
+
     def detect_person(self, frame):
         """
         Detect if any person is present in the frame using YOLOv5.
         Also tracks if the person is in the center and if they've left the frame.
+        Checks if the person is in the foreground based on bounding box size.
         
         Args:
             frame (numpy.ndarray): The input image from camera
         
         Returns:
-            bool: True if a new person is detected in the center, False otherwise
+            bool: True if a new person is detected in the center foreground, False otherwise
         """
         # Get frame dimensions
         frame_height, frame_width = frame.shape[:2]
         center_x = frame_width // 2
         center_y = frame_height // 2
         
-        # Define center region (middle 1/3 of frame)
-        center_region_width = frame_width // 3
-        center_region_height = frame_height // 3
+        # Define center region using scale parameter
+        center_region_width = int(frame_width * self.center_region_scale)
+        center_region_height = int(frame_height * self.center_region_scale)
         
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -175,6 +205,9 @@ class RoastingMirror:
         # Process detections
         detections = results.xyxy[0].cpu().numpy()
         
+        # Minimum size threshold for foreground detection (percentage of frame)
+        min_size_threshold = 0.15  # Person must occupy at least 15% of frame height
+        
         for detection in detections:
             if detection[5] == 0:  # class 0 is person in COCO dataset
                 any_person = True
@@ -183,25 +216,34 @@ class RoastingMirror:
                     # Draw bounding box
                     box = detection[:4].astype(int)
                     
+                    # Calculate person height relative to frame height
+                    person_height = box[3] - box[1]
+                    height_ratio = person_height / frame_height
+                    
                     # Calculate person center
                     person_center_x = (box[0] + box[2]) // 2
                     person_center_y = (box[1] + box[3]) // 2
                     
-                    # Check if person is in center region
+                    # Check if person is in center region and foreground
                     in_center_x = abs(person_center_x - center_x) < (center_region_width // 2)
                     in_center_y = abs(person_center_y - center_y) < (center_region_height // 2)
+                    in_foreground = height_ratio > min_size_threshold
                     
-                    if in_center_x and in_center_y:
+                    if in_center_x and in_center_y and in_foreground:
                         person_in_center = True
                         cv2.rectangle(frame, 
                                     (box[0], box[1]), 
                                     (box[2], box[3]), 
                                     (0, 255, 0), 2)
+                        # Add foreground indicator
+                        cv2.putText(frame, f"Foreground: {height_ratio:.2f}", 
+                                  (box[0], box[1] - 10),
+                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
                     else:
                         cv2.rectangle(frame, 
                                     (box[0], box[1]), 
                                     (box[2], box[3]), 
-                                    (255, 165, 0), 2)  # Orange for non-center people
+                                    (255, 165, 0), 2)  # Orange for non-center/background people
         
         # Draw center region
         cv2.rectangle(frame,
@@ -318,6 +360,7 @@ class RoastingMirror:
             image_data (bytes): base64-encoded, in-memory representation of the frame
         """
         try:
+            self.roast_completed = False  # Mark as not completed when starting
             print("\n🎭 Generating fashion critique...\n")
             
             # Get appropriate prompts based on current style
@@ -370,10 +413,21 @@ class RoastingMirror:
             
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
+            
+            # Wait for audio playback to complete or skip
+            while self.current_audio_process and self.current_audio_process.poll() is None:
+                if self.skip_current_roast:
+                    self._clear_audio()
+                    self.skip_current_roast = False
+                    break
+                time.sleep(0.1)
+            
+            self.roast_completed = True  # Mark as completed when done
             return roast_text
         except Exception as e:
             error_message = f"Error generating roast: {str(e)}"
             print(f"\n❌ {error_message}\n")
+            self.roast_completed = True  # Mark as completed even on error
         finally:
             self.roast_in_progress = False
 
@@ -415,12 +469,19 @@ class RoastingMirror:
         """
         print("Starting Miragé - The Roasting Smart Mirror (YOLOv5 Edition)")
         print("Press 'q' to quit")
-        print("Press 1-5 to switch between different critic styles:")
+        print("\nDetection Controls:")
+        print("[ and ] - Adjust confidence threshold (currently: {:.2f})".format(self.confidence_threshold))
+        print("- and + - Adjust center region size (currently: {:.2f})".format(self.center_region_scale))
+        print("\nStyle Controls:")
+        print("1-5 to switch between different critic styles:")
         print("1: Kind & Child-Friendly")
         print("2: Professional & Balanced")
         print("3: Weather-Aware")
         print("4: Ultra-Critical Expert")
         print("5: Savage Roast Master")
+        print("\nManual Control:")
+        print("SPACE - Force trigger next roast")
+        print("BACKSPACE - Skip current roast")
         
         while True:
             ret, frame = self.camera.read()
@@ -428,11 +489,14 @@ class RoastingMirror:
                 print("Camera frame capture failed.")
                 break
             
+            # Rotate frame 90 degrees clockwise
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            
             # Flip horizontally for a mirror effect
             mirror_frame = cv2.flip(frame, 1)
             
-            # Detect person
-            person_detected = self.detect_person(mirror_frame)
+            # Detect person (store result but don't use it directly)
+            _ = self.detect_person(mirror_frame)
             
             # Display current critic style
             style_names = {
@@ -445,11 +509,17 @@ class RoastingMirror:
             cv2.putText(mirror_frame, f"Style: {style_names[self.current_prompt_style]}", 
                         (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
+            # Display detection parameters
+            cv2.putText(mirror_frame, f"Conf: {self.confidence_threshold:.2f}", 
+                        (10, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(mirror_frame, f"Region: {self.center_region_scale:.2f}", 
+                        (10, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
             # Check cooldown and roast availability
             current_time = time.time()
-            if (person_detected 
-                and current_time - self.last_roast_time >= self.roast_cooldown
-                and not self.roast_in_progress):
+            if (current_time - self.last_roast_time >= self.roast_cooldown
+                and not self.roast_in_progress
+                and self.roast_completed):
                 
                 print("Person detected! Generating roast asynchronously...")
                 self._start_roast_generation(frame)  # send the unflipped frame
@@ -472,12 +542,41 @@ class RoastingMirror:
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
+            elif key == ord(' '):  # Space bar press
+                if (current_time - self.last_roast_time >= self.roast_cooldown 
+                    and not self.roast_in_progress 
+                    and self.roast_completed):  # Only trigger if previous roast completed
+                    print("Manual trigger activated! Generating roast...")
+                    self._start_roast_generation(frame)
+                    self.last_roast_time = current_time
+                else:
+                    if not self.roast_completed:
+                        print("Please wait for current roast to complete")
+                    elif not current_time - self.last_roast_time >= self.roast_cooldown:
+                        print("Please wait for cooldown to finish")
+            elif key == 8:  # Backspace key
+                if not self.roast_completed:
+                    print("Skipping current roast...")
+                    self.skip_current_roast = True
+                    self.roast_completed = True  # Mark as completed when skipping
+            elif key == ord('['):
+                self.adjust_confidence(-0.05)
+            elif key == ord(']'):
+                self.adjust_confidence(0.05)
+            elif key == ord('-'):
+                self.adjust_center_region(-0.05)
+            elif key == ord('=') or key == ord('+'):  # Both - and = keys work
+                self.adjust_center_region(0.05)
             elif ord('1') <= key <= ord('5'):
                 self.current_prompt_style = key - ord('0')
                 print(f"\nSwitched to style: {style_names[self.current_prompt_style]}")
-            elif key == ord('c'):  # Add 'c' key to clear audio
+            elif key == ord('c'):
                 self._clear_audio()
                 print("\nCleared audio playback")
+        
+            # Check if current roast is completed
+            if self.roast_completed:
+                print("Current roast completed. Waiting for next roast.")
         
         # Cleanup on exit
         self._clear_audio()  # Clear audio before closing
