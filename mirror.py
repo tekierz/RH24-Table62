@@ -818,14 +818,17 @@ class RoastingMirror:
                 frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
                 frame = cv2.flip(frame, 0)  # Flip vertically to correct orientation
             
+            # Store clean frame before any processing
+            clean_frame = frame.copy()
+
             # Process frame for person detection (YOLO expects BGR)
             should_roast, display_frame = self.detect_person(frame.copy(), draw_overlay=True)
             frame = display_frame  # Use the display frame for live view
-            
+
             # When capturing for Discord, use the original clean frame
             if should_roast:
-                # Store the original frame without any overlays for Discord
-                self.person_image = cv2.cvtColor(frame.copy(), cv2.COLOR_BGR2RGB)
+                # Convert BGR to RGB for processing
+                self.person_image = cv2.cvtColor(clean_frame, cv2.COLOR_BGR2RGB)
             
             # Generate roast if conditions are met
             if (should_roast and 

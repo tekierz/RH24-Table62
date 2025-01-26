@@ -77,14 +77,11 @@ class PersonDetector:
         center_x = frame_width // 2
         center_y = frame_height // 2
 
-        # Store original frame for capture BEFORE any modifications
-        original_frame = frame.copy()
-        
-        # Create separate display frame for overlays
+        # Create display frame for overlays, leaving original frame untouched
         display_frame = frame.copy()
         
         # Convert BGR to RGB only for YOLO detection
-        rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Define center region
         center_region_width = int(frame_width * self.center_region_scale)
@@ -128,8 +125,9 @@ class PersonDetector:
         detected_people.sort(key=lambda x: x.priority_score, reverse=True)
         
         # Update tracking state using original frame for capture
-        status = self._update_tracking_state(detected_people, person_still_in_center, original_frame)
+        status = self._update_tracking_state(detected_people, person_still_in_center, frame)
         
+        # Return the display frame for visualization
         return detected_people, status
     
     def _process_detection(self, frame, gray, box, center_x, center_y, 
@@ -194,7 +192,7 @@ class PersonDetector:
                     self.current_person_id = self.person_count
                     self.person_present = True
                 
-                # Store the original clean frame
+                # Store the original clean frame without any overlays
                 self.person_image = frame.copy()
                 self.consecutive_empty_frames = 0
         
