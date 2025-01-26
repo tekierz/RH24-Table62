@@ -627,7 +627,7 @@ class RoastingMirror:
                     break
                 time.sleep(0.1)
             
-            send_serial('black')
+            # send_serial('black')
 
             self.roast_completed = True  # Mark as completed when done
             return roast_text

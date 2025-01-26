@@ -1,24 +1,24 @@
 # Miragé - The Smart Mirror
 
-A Python-based smart mirror application that combines computer vision, artificial intelligence, and natural language processing to create an interactive experience. The system detects people in real-time, analyzes their appearance using a combination of YOLOv5, Llama 3.2 (via Lambda Labs), and OpenAI's GPT-4o-Mini, and delivers witty responses through speech synthesis, while also providing useful information like weather updates. 
+A Python-based smart mirror application that combines computer vision, artificial intelligence, and natural language processing to create an interactive experience. The system detects people in real-time, analyzes their appearance using a combination of YOLOv11, Llama 3.2 (via Lambda Labs), and OpenAI's GPT-4o-Mini, and delivers witty responses through speech synthesis, while also providing useful information like weather updates. We're also pulling weather data from OpenWeather API and displaying it on the mirror to demonstrate how to integrate external APIs.
 
 ## Core Technologies
 
 ### AI and Machine Learning
-- **OpenAI GPT-4 Vision**: Powers image analysis and generates contextual responses
+- **OpenAI GPT-4o**: Powers image analysis and generates contextual responses
 - **OpenCV**: Handles real-time computer vision and person detection
-- **YOLOv5**: Provides real-time person detection with high accuracy
+- **YOLOv11**: Provides real-time person detection with high accuracy
 - **PyTorch**: Supports deep learning models for advanced computer vision tasks
 
 ### Integration & Services
 - **Discord Bot**: Remote control, monitoring, and image sharing capabilities
 - **OpenWeather API**: Real-time weather information and condition-aware fashion advice
-- **Text-to-Speech**: Voice output using platform-specific engines
-
+- **Text-to-Speech**: GPT-4o-Mini-Audio_preview for voice output
+- **Lambda Labs**: Powers Llama 3.2 for advanced text generation
 ## Features
 
 ### Person Detection
-- Real-time person tracking using YOLOv5
+- Real-time person tracking using YOLOv11
 - Adjustable confidence threshold (using '[' and ']' keys)
 - Configurable center detection region (using '-' and '+' keys)
 - Automatic person presence tracking with cooldown timer
@@ -67,7 +67,7 @@ This project is open-sourced under the MIT License - as per the rules of the MIT
 - OpenCV community
 - Discord.py developers
 - OpenWeather API team
-- Ultralytics for YOLOv5
+- Ultralytics for YOLOv11
 - Lambda Labs for Lambda API + Free GPU credits
 
 ## Requirements
