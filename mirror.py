@@ -22,6 +22,7 @@ import requests
 from ultralytics import YOLO # type: ignore
 from person_detector import PersonDetector
 import logging
+from PIL import Image, ImageDraw, ImageFont # type: ignore
 
 class RoastingMirror:
     """
@@ -611,6 +612,8 @@ class RoastingMirror:
             self.logger.info(roast_text)
             self.logger.info("=" * 50 + "\n")
 
+            processed_image = self.overlay_keywords_and_logo(cv2.imread(debug_image_path), roast_text)
+            cv2.imwrite(debug_image_path, processed_image)
             asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
             
             # Generate and play audio for the roast
@@ -673,104 +676,45 @@ class RoastingMirror:
         base64_image = base64.b64encode(buffer).decode('utf-8')    
         return base64_image
 
-    def _extract_keywords_gpt(self, text):
+    def overlay_keywords_and_logo(self, image, keywords):
         """
-        Extract key words from the roast text using GPT
+        Overlay logo on image using PIL
         
         Args:
-            text (str): The roast text to analyze
+            image (numpy.ndarray): OpenCV BGR image
+            keywords (list): Kept for backwards compatibility but not used
             
         Returns:
-            list: List of extracted keywords
+            numpy.ndarray: Image with logo overlay added
         """
         try:
-            # Create prompt for keyword extraction
-            prompt = (
-                "Extract exactly 5 of the most impactful single words from this fashion critique. "
-                "Respond with ONLY the 5 words in lowercase, separated by commas (no spaces). "
-                "Example format: vintage,bold,classy,elegant,unique\n\n"
-                f"Text: {text}"
-            )
+            # Convert OpenCV BGR image to PIL Image
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(image_rgb)
             
-            # Make API request
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": "You are a keyword extraction specialist."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=50,
-                temperature=0.3
-            )
+            # Load and resize logo
+            logo_path = os.path.join(os.path.dirname(__file__), 'logo.png')
+            logo = Image.open(logo_path).convert('RGBA')
             
-            # Get keywords from response
-            keywords_text = response.choices[0].message.content.strip()
-            keywords = keywords_text.split(',')
+            # Calculate logo size (17.5% of image width - 175% larger than before)
+            logo_width = int(pil_image.width * 0.175 * 2.75)
+            logo_height = int(logo.height * (logo_width / logo.width))
+            logo = logo.resize((logo_width, logo_height), Image.Resampling.LANCZOS)
             
-            # Ensure we have exactly 5 keywords
-            keywords = keywords[:5]
-            while len(keywords) < 5:
-                keywords.append("")
+            # Calculate logo position (top-right corner with padding)
+            padding = 20
+            logo_position = (pil_image.width - logo_width - padding, padding)
             
-            self.logger.info(f"[Keywords] Extracted: {', '.join(keywords)}")
-            return keywords
-        
-        except Exception as e:
-            self.logger.error(f"Error extracting keywords with GPT: {str(e)}")
-            return ["", "", "", "", ""]  # Return empty keywords on error
-
-    def _draw_keywords(self, frame, keywords):
-        """
-        Draw keywords at the bottom of the frame with improved spacing
-        
-        Args:
-            frame (numpy.ndarray): The image frame
-            keywords (list): List of keywords to display
-        """
-        try:
-            frame_height, frame_width = frame.shape[:2]
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            font_scale = 1.2
-            font_thickness = 2
+            # Paste logo onto main image
+            pil_image.paste(logo, logo_position, logo)
             
-            # Calculate total width needed
-            total_width = 0
-            keyword_widths = []
-            for keyword in keywords:
-                (width, height) = cv2.getTextSize(keyword.upper(), font, font_scale, font_thickness)[0]
-                keyword_widths.append(width)
-                total_width += width
-            
-            # Calculate spacing between words to distribute them evenly
-            spacing = (frame_width - total_width) / (len(keywords) + 1)
-            
-            # Draw semi-transparent background
-            overlay = frame.copy()
-            background_height = 60  # Increased height for background
-            cv2.rectangle(overlay, 
-                         (0, frame_height - background_height),
-                         (frame_width, frame_height),
-                         (0, 0, 0),
-                         -1)
-            cv2.addWeighted(overlay, 0.7, frame, 0.3, 0, frame)
-            
-            # Draw each keyword
-            current_x = spacing  # Start after first spacing
-            y_position = frame_height - (background_height // 2) + 10  # Centered in background
-            
-            for i, keyword in enumerate(keywords):
-                # Draw text with outline for better visibility
-                text = keyword.upper()
-                cv2.putText(frame, text,
-                          (int(current_x), y_position),
-                          font, font_scale, (0, 0, 0), font_thickness + 2)
-                cv2.putText(frame, text,
-                          (int(current_x), y_position),
-                          font, font_scale, (255, 255, 255), font_thickness)
-                current_x += keyword_widths[i] + spacing
+            # Convert back to OpenCV format
+            opencv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            return opencv_image
             
         except Exception as e:
-            self.logger.error(f"Error drawing keywords: {str(e)}")
+            self.logger.error(f"Error overlaying logo: {str(e)}")
+            return image  # Return original image if there's an error
 
     def run(self):
         """
@@ -812,6 +756,9 @@ class RoastingMirror:
             
             # Mirror effect first
             frame = cv2.flip(frame, 1)
+            
+            # Rotate 180 degrees
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
             
             # Then rotate for horizontal mode if needed
             if not self.horizontal_mode:
