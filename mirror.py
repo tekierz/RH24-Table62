@@ -16,6 +16,9 @@ import asyncio
 from discord_bot import bot, send_image
 from prompt_manager import PromptManager
 import subprocess
+import argparse
+from openai import OpenAI
+import requests
 
 class RoastingMirror:
     """
@@ -35,11 +38,32 @@ class RoastingMirror:
         roast_cooldown (int): Minimum time (seconds) between roasts
     """
 
-    def __init__(self):
+    def __init__(self, use_lambda=False, horizontal_mode=False):
         """
         Initialize the RoastingMirror with all necessary components
+        
+        Args:
+            use_lambda (bool): Whether to use Lambda Labs API instead of OpenAI
+            horizontal_mode (bool): Whether to use horizontal (landscape) orientation
         """
         print("[Init] Starting initialization...")
+        
+        # Store API choice
+        self.use_lambda = use_lambda
+        
+        # Store orientation mode
+        self.horizontal_mode = horizontal_mode
+        
+        # Initialize OpenAI or Lambda Labs client
+        if self.use_lambda:
+            self.client = OpenAI(
+                api_key=os.getenv('LAMBDA_API_KEY'),
+                base_url="https://api.lambdalabs.com/v1"
+            )
+            self.vision_model = "llama3.2-11b-vision-instruct"
+        else:
+            self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
+            self.vision_model = "gpt-4o-mini"  # Using shorter model name
         
         # Initialize prompt manager and current prompt style
         self.prompt_manager = PromptManager()
@@ -65,9 +89,6 @@ class RoastingMirror:
         # Define local model directory
         self.model_dir = os.path.join(os.path.dirname(__file__), 'models')
         os.makedirs(self.model_dir, exist_ok=True)
-        
-        # Initialize OpenAI client using .env file
-        self.client = openai.OpenAI(api_key=os.getenv('OPENAI_API_KEY'))
         
         # Initialize camera
         self.camera = cv2.VideoCapture(0)
@@ -360,7 +381,7 @@ class RoastingMirror:
             image_data (bytes): base64-encoded, in-memory representation of the frame
         """
         try:
-            self.roast_completed = False  # Mark as not completed when starting
+            self.roast_completed = False
             print("\n🎭 Generating fashion critique...\n")
             
             # Get appropriate prompts based on current style
@@ -373,7 +394,7 @@ class RoastingMirror:
                 f'get_vision_user_prompt_{self.current_prompt_style}'
             )()
             
-            # Save debug image to verify capture
+            # Save debug image
             try:
                 debug_image_path = f"debug_capture_{int(time.time())}.jpg"
                 print(f"[Debug] Attempting to save debug image to: {debug_image_path}")
@@ -384,7 +405,82 @@ class RoastingMirror:
             except Exception as img_error:
                 print(f"[Debug] Failed to save debug image: {str(img_error)}")
 
-            response = self.client.chat.completions.create(
+            # Create API request based on provider
+            if self.use_lambda:
+                lambda_api_url = os.getenv('LAMBDA_API_URL')
+                if not lambda_api_url:
+                    raise ValueError("LAMBDA_API_URL not found in environment variables")
+                
+                print(f"\n[Debug] Using Lambda API URL: {lambda_api_url}")
+                
+                # Format the messages for Lambda's vision model
+                messages = [
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": user_prompt
+                            },
+                            {
+                                "type": "image",
+                                "image": {
+                                    "data": image_data
+                                }
+                            }
+                        ]
+                    }
+                ]
+
+                # Make Lambda API request
+                try:
+                    response = requests.post(
+                        f"{lambda_api_url}/chat/completions",
+                        headers={
+                            "Authorization": f"Bearer {os.getenv('LAMBDA_API_KEY')}",
+                            "Content-Type": "application/json"
+                        },
+                        json={
+                            "messages": messages,
+                            "model": self.vision_model,
+                            "max_tokens": 500,
+                            "temperature": 0.8
+                        }
+                    )
+                    
+                    print(f"\n[Debug] Lambda API Response Status: {response.status_code}")
+                    print(f"[Debug] Lambda API Response Headers: {response.headers}")
+                    
+                    # Check if the request was successful
+                    response.raise_for_status()
+                    
+                    # Parse the JSON response
+                    response_data = response.json()
+                    print(f"[Debug] Lambda API Response Data: {response_data}")
+                    
+                    if response_data is None:
+                        raise ValueError("Received empty response from Lambda API")
+                        
+                    if 'choices' not in response_data:
+                        raise ValueError(f"Missing 'choices' in response: {response_data}")
+                        
+                    if not response_data['choices']:
+                        raise ValueError("Empty choices array in response")
+                        
+                    roast_text = response_data['choices'][0]['message']['content']
+                    
+                except requests.exceptions.RequestException as e:
+                    raise ValueError(f"Lambda API request failed: {str(e)}")
+                except (KeyError, IndexError) as e:
+                    raise ValueError(f"Failed to parse Lambda API response: {str(e)}")
+                
+            else:
+                # Original OpenAI implementation
+                response = self.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {
@@ -395,12 +491,15 @@ class RoastingMirror:
                         "role": "user",
                         "content": [
                             {"type": "text", "text": user_prompt},
-                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}}
+                            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_data}", "detail": "high"}}
                         ]
                     }
                 ],
-                max_tokens=500
+                max_tokens=500,
+                temperature=0.8
+
             )
+            
             roast_text = response.choices[0].message.content
             
             # Print the roast with some formatting
@@ -469,6 +568,7 @@ class RoastingMirror:
         """
         print("Starting Miragé - The Roasting Smart Mirror (YOLOv5 Edition)")
         print("Press 'q' to quit")
+        print(f"\nOrientation: {'Horizontal' if self.horizontal_mode else 'Vertical'}")
         print("\nDetection Controls:")
         print("[ and ] - Adjust confidence threshold (currently: {:.2f})".format(self.confidence_threshold))
         print("- and + - Adjust center region size (currently: {:.2f})".format(self.center_region_scale))
@@ -489,10 +589,11 @@ class RoastingMirror:
                 print("Camera frame capture failed.")
                 break
             
-            # Rotate frame 90 degrees clockwise
-            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            # Only rotate if we're in vertical mode
+            if not self.horizontal_mode:
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
             
-            # Flip horizontally for a mirror effect
+            # Flip horizontally for mirror effect
             mirror_frame = cv2.flip(frame, 1)
             
             # Detect person (store result but don't use it directly)
@@ -584,9 +685,13 @@ class RoastingMirror:
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    """
-    Entry point for the RoastingMirror application using YOLOv5 for person detection.
-    """
+    # Add argument parser
+    parser = argparse.ArgumentParser(description='Miragé - The Roasting Smart Mirror')
+    parser.add_argument('--lambda', action='store_true', help='Use Lambda Labs API instead of OpenAI')
+    parser.add_argument('--hori', action='store_true', help='Use horizontal (landscape) orientation')
+    args = parser.parse_args()
+    
+    # Load environment variables
     load_dotenv()
     
     # Verify all required environment variables
@@ -595,6 +700,10 @@ if __name__ == "__main__":
         'DISCORD_TOKEN': 'Discord bot token',
         'DISCORD_CHANNEL_ID': 'Discord channel ID'
     }
+    
+    # Add Lambda Labs API key requirement if --lambda is used
+    if getattr(args, 'lambda'):
+        required_vars['LAMBDA_API_KEY'] = 'Lambda Labs API key'
     
     missing_vars = []
     for var, name in required_vars.items():
@@ -609,5 +718,8 @@ if __name__ == "__main__":
         sys.exit(1)
     
     print("Starting Miragé with integrated Discord bot...")
-    mirror = RoastingMirror()
+    mirror = RoastingMirror(
+        use_lambda=getattr(args, 'lambda'),
+        horizontal_mode=getattr(args, 'hori')
+    )
     mirror.run()    
