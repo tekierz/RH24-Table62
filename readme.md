@@ -92,8 +92,8 @@ This project is open-sourced under the MIT License - as per the rules of the MIT
 
 ### Step 1: Clone the Repository
 ```bash
-git clone https://github.com/yourusername/mirage-smart-mirror.git
-cd mirage-smart-mirror
+git clone https://github.com/tekierz/RH25-Table62.git
+cd RH25-Table62
 ```
 
 ### Step 2: Set Up Python Environment
