@@ -24,6 +24,7 @@ from person_detector import PersonDetector
 import logging
 from PIL import Image, ImageDraw, ImageFont # type: ignore
 
+
 class RoastingMirror:
     """
     A smart mirror application that detects people using YOLOv5-tiny
@@ -615,7 +616,6 @@ class RoastingMirror:
             processed_image = self.overlay_keywords_and_logo(cv2.imread(debug_image_path), roast_text)
             cv2.imwrite(debug_image_path, processed_image)
             asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
-            
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
             
@@ -627,6 +627,8 @@ class RoastingMirror:
                     break
                 time.sleep(0.1)
             
+            send_serial('black')
+
             self.roast_completed = True  # Mark as completed when done
             return roast_text
         except Exception as e:
