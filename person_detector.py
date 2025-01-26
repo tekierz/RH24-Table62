@@ -3,6 +3,7 @@ import time
 import numpy as np # type: ignore
 from dataclasses import dataclass
 from typing import Optional, Tuple, List
+import logging
 
 @dataclass
 class DetectedPerson:
@@ -17,10 +18,16 @@ class DetectedPerson:
 class PersonDetector:
     """Handles person detection, tracking, and trigger logic for YOLOv11"""
     
-    def __init__(self, model, confidence_threshold=0.45, center_region_scale=0.33):
+    def __init__(self, model, confidence_threshold=0.45, center_region_scale=0.33, debug=False):
+        """Initialize detector with optional debug mode"""
         self.model = model
         self.confidence_threshold = confidence_threshold
         self.center_region_scale = center_region_scale
+        self.debug = debug
+        
+        # Configure logging
+        self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.DEBUG if debug else logging.INFO)
         
         # Initialize face detection
         cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -69,6 +76,12 @@ class PersonDetector:
         frame_height, frame_width = frame.shape[:2]
         center_x = frame_width // 2
         center_y = frame_height // 2
+
+        # Store original frame for display/capture
+        display_frame = frame.copy()
+        
+        # Convert BGR to RGB only for YOLO detection
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Define center region
         center_region_width = int(frame_width * self.center_region_scale)
@@ -170,22 +183,26 @@ class PersonDetector:
             top_person = detected_people[0]
             
             # Debug print for detection criteria
-            print(f"Detection: in_center={top_person.in_center}, "
-                  f"facing_forward={top_person.facing_forward}, "
-                  f"foreground_score={top_person.foreground_score}")
+            if self.debug:
+                self.logger.debug(
+                    f"Detection: in_center={top_person.in_center}, "
+                    f"facing_forward={top_person.facing_forward}, "
+                    f"foreground_score={top_person.foreground_score}"
+                )
             
             if (top_person.in_center and 
                 top_person.facing_forward and 
                 top_person.foreground_score >= 70):
                 
                 if not self.person_present:
-                    print("New person detected!")
+                    self.logger.info("New person detected!")  # Keep this as INFO level
                     self.person_count += 1
                     self.current_person_id = self.person_count
                     self.person_present = True
                 
                 # Always update the person image when criteria are met
-                print("Capturing new person image")  # Debug print
+                if self.debug:
+                    self.logger.debug("Capturing new person image")
                 self.person_image = frame.copy()
                 self.consecutive_empty_frames = 0
             else:

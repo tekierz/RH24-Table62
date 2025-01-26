@@ -21,6 +21,7 @@ from openai import OpenAI
 import requests
 from ultralytics import YOLO # type: ignore
 from person_detector import PersonDetector
+import logging
 
 class RoastingMirror:
     """
@@ -49,15 +50,24 @@ class RoastingMirror:
         5: "Savage Roast Master"
     }
 
-    def __init__(self, use_lambda=False, horizontal_mode=False):
+    def __init__(self, use_lambda=False, horizontal_mode=False, debug=False):
         """
         Initialize the RoastingMirror with all necessary components
         
         Args:
-            use_lambda (bool): Whether to use Lambda Labs API instead of OpenAI
-            horizontal_mode (bool): Whether to use horizontal (landscape) orientation
+            use_lambda (bool): Whether to use Lambda Labs API
+            horizontal_mode (bool): Whether to use horizontal orientation
+            debug (bool): Enable debug logging
         """
-        print("[Init] Starting initialization...")
+        # Configure logging
+        logging.basicConfig(
+            level=logging.DEBUG if debug else logging.INFO,
+            format='%(levelname)s: %(message)s'
+        )
+        self.logger = logging.getLogger(__name__)
+        self.debug = debug
+        
+        self.logger.info("[Init] Starting initialization...")
         
         # Define local model directory
         self.model_dir = os.path.join(os.path.dirname(__file__), 'models')
@@ -83,15 +93,15 @@ class RoastingMirror:
         self.current_prompt_style = 1  # Default to kind, child-friendly style
         
         # Start Discord bot in a separate thread
-        print("[Discord] Creating Discord bot thread...")
+        self.logger.info("[Discord] Creating Discord bot thread...")
         self.discord_thread = threading.Thread(target=self._run_discord_bot)
         self.discord_thread.daemon = True
         self.discord_thread.start()
-        print("[Discord] Discord thread started")
+        self.logger.info("[Discord] Discord thread started")
         
         # Wait a moment for Discord bot to initialize
         time.sleep(2)
-        print("[Discord] Waited for initialization")
+        self.logger.info("[Discord] Waited for initialization")
         
         # Load environment variables
         load_dotenv()
@@ -104,7 +114,7 @@ class RoastingMirror:
         
         # Load YOLOv11 model
         try:
-            print("\nLoading YOLOv11 model...")
+            self.logger.info("\nLoading YOLOv11 model...")
             
             # Set up model paths
             model_name = "yolo11m.pt"
@@ -112,14 +122,14 @@ class RoastingMirror:
             
             # Check if model exists locally
             if not os.path.exists(model_path):
-                print(f"Downloading YOLOv11 model to {model_path}...")
+                self.logger.info(f"Downloading YOLOv11 model to {model_path}...")
                 # Download model directly without export
                 model = YOLO("yolo11m.pt")
                 # Save the model to our models directory
                 shutil.copy(os.path.join(os.getcwd(), model_name), model_path)
-                print("Model download complete!")
+                self.logger.info("Model download complete!")
             else:
-                print("Found existing model in local storage")
+                self.logger.info("Found existing model in local storage")
             
             # Load the model from local path
             self.model = YOLO(model_path)
@@ -127,10 +137,10 @@ class RoastingMirror:
             # Set model parameters
             self.model.conf = 0.45  # confidence threshold
             self.model.classes = [0]  # only detect people (class 0)
-            print(f"Successfully loaded YOLOv11 model!")
+            self.logger.info(f"Successfully loaded YOLOv11 model!")
             
         except Exception as e:
-            print(f"\nError loading YOLOv11 model: {str(e)}")
+            self.logger.error(f"\nError loading YOLOv11 model: {str(e)}")
             sys.exit(1)
         # Initialize face detection
         cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
@@ -180,11 +190,12 @@ class RoastingMirror:
         self.person_center_frames = 0  # Count of frames person has been in center
         self.min_center_frames = 10  # Minimum frames in center before capturing
         
-        # Initialize person detector
+        # Initialize person detector with debug flag
         self.person_detector = PersonDetector(
             model=self.model,
             confidence_threshold=0.45,
-            center_region_scale=0.33
+            center_region_scale=0.33,
+            debug=debug
         )
 
     def _run_discord_bot(self):
@@ -194,14 +205,14 @@ class RoastingMirror:
         try:
             TOKEN = os.getenv('DISCORD_TOKEN')
             if not TOKEN:
-                print("Error: DISCORD_TOKEN not found in .env file")
-            print("[Discord] Attempting to start Discord bot...")
-            print(f"[Discord] Using token: {TOKEN[:5]}...{TOKEN[-5:]}")  # Show first/last 5 chars safely
-            print(f"[Discord] Bot object status: {bot}")
+                self.logger.error("Error: DISCORD_TOKEN not found in .env file")
+            self.logger.info("[Discord] Attempting to start Discord bot...")
+            self.logger.info(f"[Discord] Using token: {TOKEN[:5]}...{TOKEN[-5:]}")  # Show first/last 5 chars safely
+            self.logger.info(f"[Discord] Bot object status: {bot}")
             asyncio.run(bot.start(TOKEN))
         except Exception as e:
-            print(f"[Discord] Error starting Discord bot: {str(e)}")
-            print(f"[Discord] Full error details: {repr(e)}")
+            self.logger.error(f"[Discord] Error starting Discord bot: {str(e)}")
+            self.logger.error(f"[Discord] Full error details: {repr(e)}")
 
     def adjust_confidence(self, delta):
         """
@@ -212,7 +223,7 @@ class RoastingMirror:
         """
         self.confidence_threshold = max(0.1, min(0.9, self.confidence_threshold + delta))
         self.model.conf = self.confidence_threshold
-        print(f"\nConfidence threshold adjusted to: {self.confidence_threshold:.2f}")
+        self.logger.info(f"\nConfidence threshold adjusted to: {self.confidence_threshold:.2f}")
 
     def adjust_center_region(self, delta):
         """
@@ -222,7 +233,7 @@ class RoastingMirror:
             delta (float): Amount to adjust region scale by (positive or negative)
         """
         self.center_region_scale = max(0.1, min(0.9, self.center_region_scale + delta))
-        print(f"\nCenter region scale adjusted to: {self.center_region_scale:.2f}")
+        self.logger.info(f"\nCenter region scale adjusted to: {self.center_region_scale:.2f}")
 
     def detect_person(self, frame):
         """
@@ -237,6 +248,12 @@ class RoastingMirror:
         center_region_width = int(frame_width * self.center_region_scale)
         center_region_height = int(frame_height * self.center_region_scale)
         
+        # Draw center region rectangle for debugging
+        cv2.rectangle(frame,
+                     (center_x - center_region_width//2, center_y - center_region_height//2),
+                     (center_x + center_region_width//2, center_y + center_region_height//2),
+                     (0, 255, 0), 2)
+        
         # Run YOLOv11 detection
         results = self.model(frame, verbose=False)
         
@@ -246,7 +263,9 @@ class RoastingMirror:
         # Convert frame to grayscale for face detection
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        person_still_in_center = False  # Track if current person is still in center
+        person_still_in_center = False
+        best_person = None
+        highest_score = 0
         
         for result in results[0].boxes.data:
             if int(result[5]) == 0:  # class 0 is person
@@ -286,84 +305,76 @@ class RoastingMirror:
                         (facing_forward * 30)
                     )
                     
-                    detected_people.append({
+                    person_data = {
                         'box': box,
                         'priority_score': priority_score,
                         'foreground_score': foreground_score,
                         'facing_forward': facing_forward,
                         'in_center': in_center_x and in_center_y
-                    })
-        
-        # Sort and limit to top 10 people
-        detected_people.sort(key=lambda x: x['priority_score'], reverse=True)
-        detected_people = detected_people[:10]
-        
-        # Draw information for each person
-        for i, person in enumerate(detected_people, 1):
-            box = person['box']
-            color = (0, 255, 0) if person['facing_forward'] else (0, 165, 255)
-            
-            # Draw bounding box
-            cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
-            
-            # Draw person number and metrics
-            info_text = f"#{i} | FG: {person['foreground_score']}%"
-            if person['facing_forward']:
-                info_text += " | READY"
-            
-            cv2.putText(frame, info_text, 
-                        (box[0], box[1] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                    }
+                    
+                    detected_people.append(person_data)
+                    
+                    # Track best person
+                    if priority_score > highest_score:
+                        highest_score = priority_score
+                        best_person = person_data
+                    
+                    # Draw bounding box and info
+                    color = (0, 255, 0) if facing_forward else (0, 165, 255)
+                    cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), color, 2)
+                    
+                    info_text = f"Score: {int(priority_score)} | FG: {foreground_score}%"
+                    if facing_forward:
+                        info_text += " | READY"
+                    cv2.putText(frame, info_text, 
+                              (box[0], box[1] - 10),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         # Update tracking logic
-        if not detected_people or not person_still_in_center:
+        should_trigger = False
+        
+        if best_person and best_person['in_center'] and best_person['facing_forward'] and best_person['foreground_score'] >= 70:
+            if not self.person_present:
+                self.person_count += 1
+                self.current_person_id = self.person_count
+                self.person_present = True
+                self.person_image = frame.copy()
+                self.logger.info(f"\n[Debug] New person #{self.current_person_id} captured")
+                should_trigger = True
+            person_still_in_center = True
+        
+        if not person_still_in_center:
             self.consecutive_empty_frames += 1
         else:
-            # Check highest priority person for roasting
-            top_person = detected_people[0]
-            if (top_person['in_center'] and 
-                top_person['facing_forward'] and 
-                top_person['foreground_score'] >= 70):
-                
-                if not self.person_present:
-                    self.person_count += 1
-                    self.current_person_id = self.person_count
-                    self.person_present = True
-                    self.person_image = frame.copy()
-                    print(f"\n[Debug] New person #{self.current_person_id} captured")
-                    return True
-            
             self.consecutive_empty_frames = 0
         
-        # Only reset tracking when person has actually left
+        # Reset tracking when person has left
         if self.consecutive_empty_frames >= self.consecutive_frames_threshold:
             if self.person_present:
-                print(f"\n[Debug] Person #{self.current_person_id} has left the scene")
+                self.logger.info(f"\n[Debug] Person #{self.current_person_id} has left the scene")
                 self.current_person_id = None
                 self.person_present = False
                 self.person_image = None
-                self.last_roast_time = 0  # Reset timer only when person leaves
+                self.last_roast_time = 0
             self.consecutive_empty_frames = 0
         
         # Draw status overlay
-        status_text = f"Current: #{self.current_person_id} | " if self.current_person_id else ""
-        if self.person_present:
-            if person_still_in_center:
-                status_text += "Person still in frame - waiting for exit"
-                # Don't show cooldown timer while person is still in frame
-            else:
-                status_text += "Roasted - waiting for complete exit"
-                # Show cooldown timer only when person has moved from center
-                time_remaining = max(0, self.roast_cooldown - (time.time() - self.last_roast_time))
-                cv2.putText(frame, f"Next capture in: {int(time_remaining)}s", 
-                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        else:
-            status_text += "Ready for new person"
+        status_text = f"People detected: {len(detected_people)} | "
+        status_text += f"Current: #{self.current_person_id} | " if self.current_person_id else "Ready | "
+        status_text += "Processing..." if self.roast_in_progress else "Waiting..."
         
-        cv2.putText(frame, status_text, (10, 90), 
+        cv2.putText(frame, status_text, (10, 30), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
-        return False
+        # Draw cooldown timer if applicable
+        if self.last_roast_time > 0:
+            time_remaining = max(0, self.roast_cooldown - (time.time() - self.last_roast_time))
+            if time_remaining > 0:
+                cv2.putText(frame, f"Next capture in: {int(time_remaining)}s", 
+                            (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        return should_trigger
 
     def _clear_audio(self):
         """
@@ -439,7 +450,7 @@ class RoastingMirror:
                     self.current_audio_process = subprocess.Popen(['xdg-open', speech_file_path])
             
         except Exception as e:
-            print(f"Error generating or playing audio: {str(e)}")
+            self.logger.error(f"Error generating or playing audio: {str(e)}")
     
     def _roast_worker(self, image_data):
         """
@@ -451,7 +462,7 @@ class RoastingMirror:
         """
         try:
             self.roast_completed = False
-            print("\n🎭 Generating fashion critique...\n")
+            self.logger.info("\n🎭 Generating fashion critique...\n")
             
             # Get appropriate prompts based on current style
             system_prompt = getattr(
@@ -466,13 +477,13 @@ class RoastingMirror:
             # Save debug image
             try:
                 debug_image_path = f"debug_capture_{int(time.time())}.jpg"
-                print(f"[Debug] Attempting to save debug image to: {debug_image_path}")
+                self.logger.info(f"[Debug] Attempting to save debug image to: {debug_image_path}")
                 image_bytes = base64.b64decode(image_data)
                 with open(debug_image_path, "wb") as f:
                     f.write(image_bytes)
-                print(f"[Debug] Successfully saved debug image")
+                self.logger.info(f"[Debug] Successfully saved debug image")
             except Exception as img_error:
-                print(f"[Debug] Failed to save debug image: {str(img_error)}")
+                self.logger.error(f"[Debug] Failed to save debug image: {str(img_error)}")
 
             # Create API request based on provider
             if self.use_lambda:
@@ -480,7 +491,7 @@ class RoastingMirror:
                 if not lambda_api_url:
                     raise ValueError("LAMBDA_API_URL not found in environment variables")
                 
-                print(f"\n[Debug] Using Lambda API URL: {lambda_api_url}")
+                self.logger.info(f"\n[Debug] Using Lambda API URL: {lambda_api_url}")
                 
                 # Format the messages for Lambda's vision model
                 messages = [
@@ -521,15 +532,15 @@ class RoastingMirror:
                         }
                     )
                     
-                    print(f"\n[Debug] Lambda API Response Status: {response.status_code}")
-                    print(f"[Debug] Lambda API Response Headers: {response.headers}")
+                    self.logger.info(f"\n[Debug] Lambda API Response Status: {response.status_code}")
+                    self.logger.info(f"[Debug] Lambda API Response Headers: {response.headers}")
                     
                     # Check if the request was successful
                     response.raise_for_status()
                     
                     # Parse the JSON response
                     response_data = response.json()
-                    print(f"[Debug] Lambda API Response Data: {response_data}")
+                    self.logger.info(f"[Debug] Lambda API Response Data: {response_data}")
                     
                     if response_data is None:
                         raise ValueError("Received empty response from Lambda API")
@@ -572,10 +583,10 @@ class RoastingMirror:
             roast_text = response.choices[0].message.content
             
             # Print the roast with some formatting
-            print("\n📺 Fashion Judge Says:")
-            print("=" * 50)
-            print(roast_text)
-            print("=" * 50 + "\n")
+            self.logger.info("\n📺 Fashion Judge Says:")
+            self.logger.info("=" * 50)
+            self.logger.info(roast_text)
+            self.logger.info("=" * 50 + "\n")
 
             asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
             
@@ -594,7 +605,7 @@ class RoastingMirror:
             return roast_text
         except Exception as e:
             error_message = f"Error generating roast: {str(e)}"
-            print(f"\n❌ {error_message}\n")
+            self.logger.error(f"\n❌ {error_message}\n")
             self.roast_completed = True  # Mark as completed even on error
         finally:
             self.roast_in_progress = False
@@ -602,10 +613,10 @@ class RoastingMirror:
     def _start_roast_generation(self, image):
         """Start the roast generation process with the given image"""
         if image is None:
-            print("No valid person image captured for roasting.")
+            self.logger.error("No valid person image captured for roasting.")
             return
         
-        print("Starting roast generation...")
+        self.logger.info("Starting roast generation...")
         self.roast_in_progress = True
         self.roast_completed = False
         
@@ -625,16 +636,16 @@ class RoastingMirror:
         Encode an OpenCV image to base64 string for API requests
         
         Args:
-            image (numpy.ndarray): OpenCV image in BGR format
+            image (numpy.ndarray): OpenCV image in RGB format
             
         Returns:
             str: Base64 encoded image string
         """
-        # Convert image from BGR to RGB
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Convert RGB to BGR for cv2.imencode
+        bgr_image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         
         # Encode image to JPEG format
-        _, buffer = cv2.imencode('.jpg', rgb_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        _, buffer = cv2.imencode('.jpg', bgr_image, [cv2.IMWRITE_JPEG_QUALITY, 85])
         
         # Convert to base64 string
         base64_image = base64.b64encode(buffer).decode('utf-8')
@@ -656,51 +667,52 @@ class RoastingMirror:
         
         The loop continues until the user presses 'q' to quit.
         """
-        print("Starting Miragé - The Roasting Smart Mirror (YOLOv11 Edition)")
-        print("Press 'q' to quit")
-        print(f"\nOrientation: {'Horizontal' if self.horizontal_mode else 'Vertical'}")
-        print("\nDetection Controls:")
-        print("[ and ] - Adjust confidence threshold (currently: {:.2f})".format(self.confidence_threshold))
-        print("- and + - Adjust center region size (currently: {:.2f})".format(self.center_region_scale))
-        print("\nStyle Controls:")
-        print("1-5 to switch between different critic styles:")
-        print("1: Kind & Child-Friendly")
-        print("2: Professional & Balanced")
-        print("3: Weather-Aware")
-        print("4: Ultra-Critical Expert")
-        print("5: Savage Roast Master")
-        print("\nManual Control:")
-        print("SPACE - Force trigger next roast")
-        print("BACKSPACE - Skip current roast")
+        self.logger.info("Starting Miragé - The Roasting Smart Mirror (YOLOv11 Edition)")
+        self.logger.info("Press 'q' to quit")
+        self.logger.info(f"\nOrientation: {'Horizontal' if self.horizontal_mode else 'Vertical'}")
+        self.logger.info("\nDetection Controls:")
+        self.logger.info("[ and ] - Adjust confidence threshold (currently: {:.2f})".format(self.confidence_threshold))
+        self.logger.info("- and + - Adjust center region size (currently: {:.2f})".format(self.center_region_scale))
+        self.logger.info("\nStyle Controls:")
+        self.logger.info("1-5 to switch between different critic styles:")
+        self.logger.info("1: Kind & Child-Friendly")
+        self.logger.info("2: Professional & Balanced")
+        self.logger.info("3: Weather-Aware")
+        self.logger.info("4: Ultra-Critical Expert")
+        self.logger.info("5: Savage Roast Master")
+        self.logger.info("\nManual Control:")
+        self.logger.info("SPACE - Force trigger next roast")
+        self.logger.info("BACKSPACE - Skip current roast")
         
         while True:
             ret, frame = self.camera.read()
             if not ret:
-                print("Camera frame capture failed.")
+                self.logger.error("Failed to capture frame")
                 break
             
-            # Process frame orientation
+            # Mirror effect first
+            frame = cv2.flip(frame, 1)
+            
+            # Then rotate for horizontal mode if needed
             if not self.horizontal_mode:
-                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-            mirror_frame = cv2.flip(frame, 1)
+                frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                frame = cv2.flip(frame, 0)  # Flip vertically to correct orientation
             
-            # Process frame through person detector
-            detected_people, status = self.person_detector.process_frame(mirror_frame)
+            # Process frame for person detection (YOLO expects BGR)
+            should_roast = self.detect_person(frame)
             
-            # Check if should trigger roast
-            should_roast, person_image = self.person_detector.should_trigger_roast()
-            if should_roast and not self.roast_in_progress:
-                if person_image is not None:
-                    print("Starting roast generation with captured image")
-                    self._start_roast_generation(person_image)
-                else:
-                    print("No valid person image available for roasting")
+            # Generate roast if conditions are met
+            if (should_roast and 
+                time.time() - self.last_roast_time >= self.roast_cooldown and 
+                not self.roast_in_progress and 
+                self.roast_completed):
+                # Store RGB version for roast generation
+                self.person_image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                self._start_roast_generation(self.person_image)
+                self.last_roast_time = time.time()
             
-            # Draw status overlay
-            self._draw_ui(mirror_frame, detected_people, status)
-            
-            # Show the frame
-            cv2.imshow("Miragé", mirror_frame)
+            # Show the frame (OpenCV expects BGR, so no conversion needed)
+            cv2.imshow("Miragé (YOLOv11)", frame)
             
             # Handle key presses
             if not self._handle_keys():
@@ -761,17 +773,17 @@ class RoastingMirror:
             if (time.time() - self.last_roast_time >= self.roast_cooldown 
                 and not self.roast_in_progress 
                 and self.roast_completed):  # Only trigger if previous roast completed
-                print("Manual trigger activated! Generating roast...")
+                self.logger.info("Manual trigger activated! Generating roast...")
                 self._start_roast_generation(self.person_image)
                 self.last_roast_time = time.time()
             else:
                 if not self.roast_completed:
-                    print("Please wait for current roast to complete")
+                    self.logger.info("Please wait for current roast to complete")
                 elif not time.time() - self.last_roast_time >= self.roast_cooldown:
-                    print("Please wait for cooldown to finish")
+                    self.logger.info("Please wait for cooldown to finish")
         elif key == 8:  # Backspace key
             if not self.roast_completed:
-                print("Skipping current roast...")
+                self.logger.info("Skipping current roast...")
                 self.skip_current_roast = True
                 self.roast_completed = True  # Mark as completed when skipping
         elif key == ord('['):
@@ -784,10 +796,10 @@ class RoastingMirror:
             self.adjust_center_region(0.05)
         elif ord('1') <= key <= ord('5'):
             self.current_prompt_style = key - ord('0')
-            print(f"\nSwitched to style: {self.style_names[self.current_prompt_style]}")
+            self.logger.info(f"\nSwitched to style: {self.style_names[self.current_prompt_style]}")
         elif key == ord('c'):
             self._clear_audio()
-            print("\nCleared audio playback")
+            self.logger.info("\nCleared audio playback")
         
         return True
 
@@ -802,6 +814,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Miragé - The Roasting Smart Mirror')
     parser.add_argument('--lambda', action='store_true', help='Use Lambda Labs API instead of OpenAI')
     parser.add_argument('--hori', action='store_true', help='Use horizontal (landscape) orientation')
+    parser.add_argument('--debug', action='store_true', help='Enable debug logging')
     args = parser.parse_args()
     
     # Load environment variables
@@ -833,6 +846,7 @@ if __name__ == "__main__":
     print("Starting Miragé with integrated Discord bot...")
     mirror = RoastingMirror(
         use_lambda=getattr(args, 'lambda'),
-        horizontal_mode=getattr(args, 'hori')
+        horizontal_mode=getattr(args, 'hori'),
+        debug=getattr(args, 'debug')
     )
     mirror.run()    
