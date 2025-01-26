@@ -509,6 +509,15 @@ class RoastingMirror:
             print("=" * 50 + "\n")
 
             asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
+
+
+
+
+
+
+
+
+
             
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
@@ -544,6 +553,10 @@ class RoastingMirror:
         
         image_data = base64.b64encode(encoded_image).decode('utf-8')
         
+
+
+
+
         self.roast_thread = threading.Thread(
             target=self._roast_worker, 
             args=(image_data,)

@@ -20,6 +20,9 @@ async def send_image(message, image_path):
     :param message: string to send
 
     :param image_path: local path to image file
+
+
+
     """
     # Get the channel
     CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
@@ -29,6 +32,9 @@ async def send_image(message, image_path):
     if not os.path.exists(image_path):
         print(f"Error: Image {image_path} not found.")
         return
+
+
+
     
     # Async function to send image
     async def send_image_to_channel():
@@ -38,12 +44,20 @@ async def send_image(message, image_path):
                 await channel.send(message)
                 
             await channel.send(file=picture)
+
+
+
+
     
     # Run the async function
     bot.loop.create_task(send_image_to_channel())
 
+
+
+
+
+
+
 @bot.event
 async def on_ready():
     print(f'Discord bot logged in as {bot.user.name}')
-
-# Remove the main() function and if __name__ == '__main__' block
