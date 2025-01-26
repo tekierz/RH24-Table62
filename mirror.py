@@ -92,7 +92,7 @@ class RoastingMirror:
         
         # Initialize prompt manager and current prompt style
         self.prompt_manager = PromptManager()
-        self.current_prompt_style = 1  # Default to kind, child-friendly style
+        self.current_prompt_style = 3  # Changed default to Weather-Aware style
         
         # Start Discord bot in a separate thread
         self.logger.info("[Discord] Creating Discord bot thread...")
@@ -869,7 +869,15 @@ class RoastingMirror:
         elif key == ord('-'):
             self.adjust_center_region(-0.05)
         elif key == ord('=') or key == ord('+'):  # Both - and = keys work
-            self.adjust_center_region(0.05)
+            # Clear current roast and force new generation
+            self._clear_audio()  # Clear any playing audio
+            self.skip_current_roast = True  # Skip current roast if in progress
+            self.roast_completed = True  # Mark as completed
+            self.last_roast_time = 0  # Reset cooldown
+            self.logger.info("\nForcing new roast generation...")
+            if self.person_image is not None:
+                self._start_roast_generation(self.person_image)
+                self.last_roast_time = time.time()
         elif ord('1') <= key <= ord('5'):
             self.current_prompt_style = key - ord('0')
             self.logger.info(f"\nSwitched to style: {self.style_names[self.current_prompt_style]}")
