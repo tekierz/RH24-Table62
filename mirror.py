@@ -372,7 +372,7 @@ class RoastingMirror:
         except Exception as e:
             print(f"Error generating or playing audio: {str(e)}")
     
-    def _roast_worker(self, image_data):
+    async def _roast_worker(self, image_data):
         """
         Background worker function to handle GPT-based roast generation 
         and then call the audio generation method.
@@ -496,7 +496,7 @@ class RoastingMirror:
                     }
                 ],
                 max_tokens=500,
-                temperature=0.8
+                temperature=0.6
 
             )
             
@@ -508,7 +508,16 @@ class RoastingMirror:
             print(roast_text)
             print("=" * 50 + "\n")
 
-            asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
+            # Send to Discord and get upload status
+            upload_success = await send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path)
+
+            # Delete the debug image if upload was successful
+            if upload_success and os.path.exists(debug_image_path):
+                try:
+                    os.remove(debug_image_path)
+                    print(f"[Debug] Successfully deleted debug image: {debug_image_path}")
+                except Exception as del_error:
+                    print(f"[Debug] Failed to delete debug image: {str(del_error)}")
             
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
@@ -544,9 +553,13 @@ class RoastingMirror:
         
         image_data = base64.b64encode(encoded_image).decode('utf-8')
         
+        # Create and run the async function in the background
+        async def run_async_worker():
+            await self._roast_worker(image_data)
+        
         self.roast_thread = threading.Thread(
-            target=self._roast_worker, 
-            args=(image_data,)
+            target=lambda: asyncio.run(run_async_worker()),
+            args=()
         )
         self.roast_thread.daemon = True
         self.roast_thread.start()
