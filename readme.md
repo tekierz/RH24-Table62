@@ -1,6 +1,6 @@
 # Miragé - The Smart Mirror
 
-A Python-based smart mirror application that combines computer vision, artificial intelligence, and natural language processing to create an interactive experience. The system detects people in real-time, analyzes their appearance using GPT-4 Vision, and delivers witty responses through speech synthesis, while also providing useful information like weather updates.
+A Python-based smart mirror application that combines computer vision, artificial intelligence, and natural language processing to create an interactive experience. The system detects people in real-time, analyzes their appearance using a combination of YOLOv5, Llama 3.2 (via Lambda Labs), and OpenAI's GPT-4o-Mini, and delivers witty responses through speech synthesis, while also providing useful information like weather updates. 
 
 ## Core Technologies
 
@@ -80,7 +80,7 @@ This project is open-sourced under the MIT License - as per the rules of the MIT
 - This project is built to run on lightweight edge compute devices, such as the Qualcomm RB3 Gen 2 Developer Kit (Vision Kit), Raspberry Pi, Mac Mini, and more. 
 
 ### Software
-- Python 3.8 or higher
+- Python (Tested working on version 3.11)
 - Operating system: Windows 10+, macOS 10.15+, or Linux (Ubuntu 20.04+ recommended)
 
 ### API Keys
@@ -127,7 +127,6 @@ pip install -r requirements.txt
 ### Platform-Specific Setup
 
 #### Windows
-- Install Visual C++ Build Tools (required for OpenCV)
 - Install the appropriate PyTorch version from pytorch.org
 
 #### macOS
