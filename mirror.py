@@ -19,6 +19,14 @@ import subprocess
 import argparse
 from openai import OpenAI
 import requests
+from esp import send_serial
+import atexit
+
+def on_close():
+    send_serial('black')
+
+# Register the function
+atexit.register(on_close)
 
 class RoastingMirror:
     """
@@ -510,15 +518,9 @@ class RoastingMirror:
 
             asyncio.run(send_image("•☽────✧˖°˖☆˖°˖✧────☾•" "\n" + roast_text + "\n" + "⬇️ ⬇️ ⬇️", debug_image_path))
 
+            #turn on led ring
+            send_serial('white')
 
-
-
-
-
-
-
-
-            
             # Generate and play audio for the roast
             self.generate_and_play_audio(roast_text)
             
@@ -530,6 +532,8 @@ class RoastingMirror:
                     break
                 time.sleep(0.1)
             
+            send_serial('black')
+
             self.roast_completed = True  # Mark as completed when done
             return roast_text
         except Exception as e:

@@ -12,3 +12,4 @@ pyyaml
 torchvision
 matplotlib
 seaborn
+pyserial
