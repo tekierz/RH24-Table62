@@ -5,3 +5,4 @@ __pycache__
 *.jpg
 *.wav
 *.pt
+.DS_Store
